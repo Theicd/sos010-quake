@@ -1,7 +1,8 @@
 /**
  * SOS Quake quick-play — same shape as Kart Royale SosNet:
  * Nostr discovery + NIP-44 signalling + WebRTC data channel.
- * One Play tap: join an open hall (max 4) or host a deathmatch listen server.
+ * One Play tap: join an open hall (max 4) or host.
+ * Modes: Deathmatch (FFA) or Team (coop vs monsters).
  * Late joiners spawn next to whoever is already on the map.
  */
 
@@ -13,6 +14,7 @@ import { Cbuf_AddText } from './cmd.js';
 import { Con_Printf } from './common.js';
 import { SCR_BeginLoadingPlaque } from './gl_screen.js';
 import { set_key_dest, key_game } from './keys.js';
+import { M_ForceCloseMenu } from './menu.js';
 import {
 	RTC_SetPendingClient,
 	RTC_EnqueueIncoming,
@@ -26,9 +28,13 @@ import { SV_LinkEdict } from './world.js';
 import { VectorCopy } from './mathlib.js';
 import { COM_EnsureFile } from './pak.js';
 
-export const ROOM_TAG = 'sos_quake_v1';
+export const ROOM_TAG = 'sos_quake_v2';
 const KIND_ROOM = 33214;
 const KIND_SIGNAL = 25214;
+const UPSTREAM_GITHUB = 'https://github.com/mrdoob/three-quake';
+const TEAM_MAP = 'start';
+const MODE_DM = 'dm';
+const MODE_TEAM = 'team';
 const RELAYS = [
 	'wss://relay.damus.io',
 	'wss://nos.lol',
@@ -62,8 +68,9 @@ const ICE_WAIT_MS = 4_000;
 const DEFAULT_MAP = 'rapture1';
 /** Extra wait (0–2.5s) so two Play presses don't both become host. */
 const HOST_STAGGER_MAX_MS = 2_500;
-const BUS_NAME = 'sos_quake_v1_bus';
-const LS_ROOM_KEY = 'sos_quake_v1_rooms';
+const BUS_NAME = 'sos_quake_v2_bus';
+const LS_ROOM_KEY = 'sos_quake_v2_rooms';
+const LS_MODE_KEY = 'sos.quake.mode';
 
 const now = () => Date.now();
 const nowSec = () => Math.floor( now() / 1000 );
@@ -121,9 +128,69 @@ function mapFromQuery() {
 
 }
 
+function readMode() {
+
+	try {
+
+		const q = new URLSearchParams( location.search ).get( 'mode' );
+		if ( q === 'team' || q === 'coop' ) return MODE_TEAM;
+		if ( q === 'dm' || q === 'deathmatch' ) return MODE_DM;
+		const stored = localStorage.getItem( LS_MODE_KEY );
+		if ( stored === MODE_TEAM || stored === MODE_DM ) return stored;
+
+	} catch { /* private mode */ }
+
+	return MODE_DM;
+
+}
+
+function isStandalone() {
+
+	try {
+
+		return matchMedia( '(display-mode: fullscreen), (display-mode: standalone)' ).matches
+			|| navigator.standalone === true;
+
+	} catch {
+
+		return false;
+
+	}
+
+}
+
+function isIOS() {
+
+	return /iphone|ipad|ipod/i.test( navigator.userAgent )
+		|| ( navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1 );
+
+}
+
 // --------------------------------------------------------------------------- UI
 
+const ICON_GEAR = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+const ICON_DL = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>';
+const ICON_GH = '<svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
+
 const CSS = `
+#sos-quake-chrome {
+  position: fixed; z-index: 220; inset-inline: 0; top: 0;
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 0;
+  pointer-events: none;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+#sos-quake-chrome a, #sos-quake-chrome button {
+  pointer-events: auto; width: 44px; height: 44px; border-radius: 12px;
+  display: grid; place-items: center; border: 1px solid rgba(255,255,255,.16);
+  background: rgba(8, 7, 6, .62); color: #f2e6c9; cursor: pointer;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 8px 22px rgba(0,0,0,.35); text-decoration: none;
+}
+#sos-quake-chrome .right { display: flex; gap: 8px; }
+#sos-quake-chrome button:hover, #sos-quake-chrome a:hover {
+  background: rgba(30, 24, 16, .82); color: #ffe7a8;
+}
 #sos-quake-ui {
   position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
   align-items: center; justify-content: flex-end; pointer-events: none;
@@ -145,6 +212,18 @@ const CSS = `
   font-size: 11px; letter-spacing: .28em; text-transform: uppercase;
   color: #d6b262; margin-bottom: 6px;
 }
+#sos-quake-ui .modes {
+  display: flex; gap: 8px; margin: 0 0 12px;
+}
+#sos-quake-ui .mode {
+  flex: 1; border-radius: 999px; border: 1px solid rgba(255,255,255,.16);
+  background: rgba(255,255,255,.06); color: #cbb996; padding: 8px 10px;
+  font: 700 12px/1.1 system-ui, sans-serif; letter-spacing: .04em; cursor: pointer;
+}
+#sos-quake-ui .mode.on {
+  color: #1a1208; border-color: rgba(214,178,98,.7);
+  background: linear-gradient(180deg, #ffe08a, #d4a43a);
+}
 #sos-quake-ui h1 {
   font-size: 1.55rem; line-height: 1.1; margin: 0 0 6px; font-weight: 800;
   letter-spacing: -0.02em; color: #ffe7a8;
@@ -162,13 +241,10 @@ const CSS = `
   color: #1a1208; background: linear-gradient(180deg, #ffe08a, #d4a43a);
 }
 #sos-quake-ui .btn:disabled { opacity: .55; cursor: wait; }
-#sos-quake-ui .btn-gear {
-  flex: 0 0 48px; width: 48px; border-radius: 11px; border: 1px solid rgba(255,255,255,.18);
-  background: rgba(255,255,255,.08); color: #fff; font-size: 18px; cursor: pointer;
-}
 #sos-quake-ui .hint { margin-top: 10px; font-size: 11px; color: #8e8168; line-height: 1.4; }
 #sos-quake-lamp {
-  position: fixed; z-index: 210; top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px;
+  position: fixed; z-index: 210; top: calc(10px + env(safe-area-inset-top, 0px));
+  right: calc(12px + 44px + 8px + 44px + 10px);
   min-width: 28px; height: 26px; padding: 0 8px; border-radius: 999px;
   display: none; align-items: center; justify-content: center; gap: 4px;
   font: 800 12px/1 system-ui, sans-serif; color: #062312;
@@ -177,6 +253,36 @@ const CSS = `
 #sos-quake-lamp.on { display: flex; background: #38d86b; box-shadow: 0 0 12px #38d86b; }
 #sos-quake-lamp.search { display: flex; animation: sos-q-pulse 1.1s ease-in-out infinite; }
 @keyframes sos-q-pulse { 50% { opacity: .35; } }
+#sos-quake-idlg {
+  position: fixed; inset: 0; z-index: 240; display: none; place-items: center; padding: 16px;
+  background: rgba(4, 4, 4, .66); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+#sos-quake-idlg.show { display: grid; }
+#sos-quake-idlg .card {
+  width: min(420px, 100%); padding: 22px 22px 18px; border-radius: 18px; text-align: center;
+  background: linear-gradient(180deg, rgba(28, 22, 14, .97), rgba(10, 8, 6, .97));
+  border: 1px solid rgba(214, 178, 98, .45);
+  box-shadow: 0 18px 50px rgba(0,0,0,.6); color: #f4efe4;
+}
+#sos-quake-idlg img { width: 64px; height: 64px; border-radius: 14px; }
+#sos-quake-idlg h3 {
+  margin: 12px 0 8px; font-size: 18px; font-weight: 900; letter-spacing: .06em;
+  text-transform: uppercase; color: #ffd98a;
+}
+#sos-quake-idlg p { margin: 0 0 8px; color: rgba(244,239,228,.88); font: 600 14px/1.5 system-ui, sans-serif; }
+#sos-quake-idlg ul {
+  margin: 8px 0 16px; padding: 0; list-style: none; font-size: 13px; color: rgba(255,230,190,.82); text-align: start;
+}
+#sos-quake-idlg li { margin: 6px 0; padding-inline-start: 1.1em; position: relative; }
+#sos-quake-idlg li::before { content: "•"; position: absolute; inset-inline-start: 0; color: #d6b262; }
+#sos-quake-idlg .row { display: flex; gap: 10px; justify-content: center; }
+#sos-quake-idlg button {
+  flex: 1; min-height: 46px; border-radius: 999px; cursor: pointer;
+  font: 900 14px/1 system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase;
+}
+#sos-quake-idlg .ok { border: 0; color: #2a1a06; background: linear-gradient(180deg, #ffe3a3, #f4b451); }
+#sos-quake-idlg .no { border: 1px solid rgba(255,255,255,.25); color: #f4efe4; background: rgba(255,255,255,.06); }
 `;
 
 // --------------------------------------------------------------------------- net
@@ -199,15 +305,18 @@ class SosQuakeNet {
 		this.announceTimer = 0;
 		this.lastAnnounce = 0;
 		this.timers = [];
-		this.map = mapFromQuery();
+		this.mode = readMode();
+		this.map = this.mode === MODE_TEAM ? TEAM_MAP : mapFromQuery();
 		this.ui = null;
+		this.chrome = null;
 		this.lamp = null;
 		this.playBusy = false;
 		this.bus = null;
-		/** @type {Map<string, number>} pubkey -> last hello ts */
+		/** @type {Map<string, { ts: number, mode: string }>} pubkey -> hello */
 		this.candidates = new Map();
 		this.hostSince = 0;
 		this.joining = false;
+		this.deferredInstall = null;
 		this._ingestRoom = this._ingestRoom.bind( this );
 
 	}
@@ -222,28 +331,51 @@ class SosQuakeNet {
 
 		if ( document.getElementById( 'sos-quake-ui-css' ) ) return;
 
+		try {
+
+			globalThis.__sosQuakeNoDemoMenu = true;
+
+		} catch { /* ignore */ }
+
 		const style = document.createElement( 'style' );
 		style.id = 'sos-quake-ui-css';
 		style.textContent = CSS;
 		document.head.appendChild( style );
+
+		const chrome = document.createElement( 'div' );
+		chrome.id = 'sos-quake-chrome';
+		chrome.innerHTML = `
+			<a id="sos-quake-github" href="${ UPSTREAM_GITHUB }" target="_blank" rel="noopener noreferrer"
+				title="mrdoob / three-quake on GitHub" aria-label="Open three-quake on GitHub">${ ICON_GH }</a>
+			<div class="right">
+				<button type="button" id="sos-quake-download" title="Install game" aria-label="Install game">${ ICON_DL }</button>
+				<button type="button" id="sos-quake-gear" title="Game options" aria-label="Game options">${ ICON_GEAR }</button>
+			</div>
+		`;
+		document.body.appendChild( chrome );
+		this.chrome = chrome;
 
 		const root = document.createElement( 'div' );
 		root.id = 'sos-quake-ui';
 		root.innerHTML = `
 			<div class="panel">
 				<div class="brand">SOS · Three.js Quake</div>
-				<h1>Deathmatch</h1>
-				<p class="plot">Tap Play — join up to 4 players over P2P, or host if the hall is empty. New arrivals drop in next to you.</p>
+				<div class="modes" role="group" aria-label="Game mode">
+					<button type="button" class="mode" data-mode="${ MODE_DM }">Deathmatch</button>
+					<button type="button" class="mode" data-mode="${ MODE_TEAM }">Team</button>
+				</div>
+				<h1 id="sos-quake-title">Deathmatch</h1>
+				<p class="plot" id="sos-quake-plot"></p>
 				<div class="status" id="sos-quake-status">Ready</div>
 				<div class="row">
 					<button type="button" class="btn" id="sos-quake-play">Play</button>
-					<button type="button" class="btn-gear" id="sos-quake-gear" title="Options">⚙</button>
 				</div>
-				<p class="hint">No accounts. Same map session · max ${ MAX_HUMANS } players · GPL Quake / mrdoob three-quake</p>
+				<p class="hint">No accounts. Same map session · max ${ MAX_HUMANS } players · GPL Quake / <a href="${ UPSTREAM_GITHUB }" target="_blank" rel="noopener noreferrer" style="color:#d6b262">mrdoob three-quake</a></p>
 			</div>
 		`;
 		document.body.appendChild( root );
 		this.ui = root;
+		this.syncModeUi();
 
 		const lamp = document.createElement( 'div' );
 		lamp.id = 'sos-quake-lamp';
@@ -251,14 +383,184 @@ class SosQuakeNet {
 		document.body.appendChild( lamp );
 		this.lamp = lamp;
 
-		root.querySelector( '#sos-quake-play' ).addEventListener( 'click', () => this.play() );
-		root.querySelector( '#sos-quake-gear' ).addEventListener( 'click', () => {
+		const dlg = document.createElement( 'div' );
+		dlg.id = 'sos-quake-idlg';
+		document.body.appendChild( dlg );
+		dlg.addEventListener( 'click', ( e ) => {
 
-			Cbuf_AddText( 'menu_options\n' );
+			if ( e.target === dlg ) dlg.classList.remove( 'show' );
 
 		} );
 
+		root.querySelector( '#sos-quake-play' ).addEventListener( 'click', () => this.play() );
+		for ( const btn of root.querySelectorAll( '.mode' ) ) {
+
+			btn.addEventListener( 'click', () => {
+
+				if ( this.playBusy || this.role === 'host' || this.role === 'client' ) return;
+				this.setMode( btn.getAttribute( 'data-mode' ) );
+
+			} );
+
+		}
+
+		chrome.querySelector( '#sos-quake-gear' ).addEventListener( 'click', ( e ) => {
+
+			e.stopPropagation();
+			M_ForceCloseMenu();
+			Cbuf_AddText( 'menu_options\n' );
+
+		} );
+		chrome.querySelector( '#sos-quake-download' ).addEventListener( 'click', ( e ) => {
+
+			e.stopPropagation();
+			this.openInstallDialog();
+
+		} );
+		chrome.querySelector( '#sos-quake-github' ).addEventListener( 'click', ( e ) => e.stopPropagation() );
+
+		this.setupInstallPrompt();
+		M_ForceCloseMenu();
 		addEventListener( 'pagehide', () => this.leave() );
+
+	}
+
+	setMode( mode ) {
+
+		const next = mode === MODE_TEAM ? MODE_TEAM : MODE_DM;
+		this.mode = next;
+		this.map = next === MODE_TEAM ? TEAM_MAP : mapFromQuery();
+		try {
+
+			localStorage.setItem( LS_MODE_KEY, next );
+
+		} catch { /* ignore */ }
+
+		this.syncModeUi();
+
+	}
+
+	syncModeUi() {
+
+		if ( ! this.ui ) return;
+		const team = this.mode === MODE_TEAM;
+		for ( const btn of this.ui.querySelectorAll( '.mode' ) ) {
+
+			btn.classList.toggle( 'on', btn.getAttribute( 'data-mode' ) === this.mode );
+
+		}
+
+		const title = this.ui.querySelector( '#sos-quake-title' );
+		const plot = this.ui.querySelector( '#sos-quake-plot' );
+		if ( title ) title.textContent = team ? 'Team' : 'Deathmatch';
+		if ( plot ) {
+
+			plot.textContent = team
+				? 'Tap Play — 2–4 players team up over P2P against the monsters (not each other). Join an open hall or host if empty.'
+				: 'Tap Play — join up to 4 players over P2P in free-for-all, or host if the hall is empty. New arrivals drop in next to you.';
+
+		}
+
+	}
+
+	setupInstallPrompt() {
+
+		if ( 'serviceWorker' in navigator ) {
+
+			addEventListener( 'load', () => {
+
+				navigator.serviceWorker.register( './sw.js' ).catch( () => {} );
+
+			} );
+			navigator.serviceWorker.register( './sw.js' ).catch( () => {} );
+
+		}
+
+		addEventListener( 'beforeinstallprompt', ( e ) => {
+
+			e.preventDefault();
+			this.deferredInstall = e;
+
+		} );
+		addEventListener( 'appinstalled', () => {
+
+			this.deferredInstall = null;
+			document.getElementById( 'sos-quake-idlg' )?.classList.remove( 'show' );
+
+		} );
+
+	}
+
+	openInstallDialog() {
+
+		const dlg = document.getElementById( 'sos-quake-idlg' );
+		if ( ! dlg ) return;
+
+		if ( isStandalone() ) {
+
+			dlg.innerHTML = `
+				<div class="card">
+					<img src="./icon.png" alt="">
+					<h3>כבר מותקן</h3>
+					<p>SOS Quake כבר רץ כהתקנה / אייקון במסך הבית.</p>
+					<div class="row"><button type="button" class="ok">הבנתי</button></div>
+				</div>`;
+			dlg.querySelector( '.ok' ).onclick = () => dlg.classList.remove( 'show' );
+			dlg.classList.add( 'show' );
+			return;
+
+		}
+
+		const head = `
+			<img src="./icon.png" alt="">
+			<h3>התקנת המשחק</h3>
+			<p>ההתקנה מוסיפה את SOS Quake כאייקון בשולחן העבודה או במסך הבית — נוח במובייל ובמחשב, בלי חנות אפליקציות.</p>
+			<ul>
+				<li>פותח במסך מלא, בלי סרגלי דפדפן</li>
+				<li>גישה מהירה מהאייקון</li>
+				<li>עובד גם בטלפון וגם במחשב</li>
+			</ul>`;
+
+		if ( this.deferredInstall ) {
+
+			dlg.innerHTML = `<div class="card">${ head }<p>לחצו <b>התקן</b> לאישור בדפדפן.</p>
+				<div class="row">
+					<button type="button" class="no">לא עכשיו</button>
+					<button type="button" class="ok">התקן</button>
+				</div></div>`;
+			dlg.querySelector( '.no' ).onclick = () => dlg.classList.remove( 'show' );
+			dlg.querySelector( '.ok' ).onclick = async () => {
+
+				dlg.classList.remove( 'show' );
+				const ev = this.deferredInstall;
+				this.deferredInstall = null;
+				if ( ! ev ) return;
+				try {
+
+					await ev.prompt();
+					await ev.userChoice;
+
+				} catch { /* dismissed */ }
+
+			};
+
+		} else if ( isIOS() ) {
+
+			dlg.innerHTML = `<div class="card">${ head }
+				<p>ב־Safari: לחצו <b>Share</b> ⌒ ואז <b>Add to Home Screen</b>.</p>
+				<div class="row"><button type="button" class="ok">הבנתי</button></div></div>`;
+			dlg.querySelector( '.ok' ).onclick = () => dlg.classList.remove( 'show' );
+
+		} else {
+
+			dlg.innerHTML = `<div class="card">${ head }
+				<p>בדפדפן: תפריט <b>⋮</b> / כתובת האתר → <b>Install app</b> / <b>Create shortcut</b>.</p>
+				<div class="row"><button type="button" class="ok">הבנתי</button></div></div>`;
+			dlg.querySelector( '.ok' ).onclick = () => dlg.classList.remove( 'show' );
+
+		}
+
+		dlg.classList.add( 'show' );
 
 	}
 
@@ -294,9 +596,10 @@ class SosQuakeNet {
 	start() {
 
 		this.installUi();
+		M_ForceCloseMenu();
 		if ( ! SosQuakeNet.supported() ) {
 
-			this.setStatus( 'Online play unavailable — use the Quake menu for solo' );
+			this.setStatus( 'Online play unavailable — Play starts a local game' );
 			return;
 
 		}
@@ -308,6 +611,7 @@ class SosQuakeNet {
 	play() {
 
 		if ( this.playBusy || this.role === 'host' || this.role === 'client' ) return;
+		M_ForceCloseMenu();
 		if ( ! SosQuakeNet.supported() ) {
 
 			this.soloFallback();
@@ -322,8 +626,8 @@ class SosQuakeNet {
 		this.setStatus( 'Looking for a room…' );
 		this.setLamp( 1, 'search' );
 		this.listen();
-		this.candidates.set( this.pk, nowSec() );
-		this._busSend( { t: 'hello', pubkey: this.pk, ts: nowSec() } );
+		this.candidates.set( this.pk, { ts: nowSec(), mode: this.mode } );
+		this._busSend( { t: 'hello', pubkey: this.pk, ts: nowSec(), mode: this.mode } );
 		this.timers.push( window.setTimeout(
 			() => void this.matchmake(),
 			this.liveRooms().length ? 600 : LISTEN_MS,
@@ -334,9 +638,18 @@ class SosQuakeNet {
 	soloFallback() {
 
 		this.hideUi();
+		M_ForceCloseMenu();
 		set_key_dest( key_game );
 		SCR_BeginLoadingPlaque();
-		Cbuf_AddText( `disconnect\nmaxplayers 1\ndeathmatch 1\nmap ${ this.map }\n` );
+		const team = this.mode === MODE_TEAM;
+		Cbuf_AddText(
+			`disconnect\n` +
+			`maxplayers 1\n` +
+			`deathmatch ${ team ? 0 : 1 }\n` +
+			`coop ${ team ? 1 : 0 }\n` +
+			`teamplay ${ team ? 1 : 0 }\n` +
+			`map ${ this.map }\n`,
+		);
 
 	}
 
@@ -373,6 +686,7 @@ class SosQuakeNet {
 			pubkey,
 			players: Math.max( 1, Math.min( MAX_HUMANS, Number( c.players ) || 1 ) ),
 			map: typeof c.map === 'string' ? c.map : DEFAULT_MAP,
+			mode: c.mode === MODE_TEAM ? MODE_TEAM : MODE_DM,
 			ts,
 		} );
 		this._persistLocalRooms();
@@ -435,11 +749,14 @@ class SosQuakeNet {
 				if ( ! data || typeof data !== 'object' ) return;
 				if ( data.t === 'hello' && data.pubkey && data.pubkey !== this.pk ) {
 
-					this.candidates.set( data.pubkey, Number( data.ts ) || nowSec() );
+					this.candidates.set( data.pubkey, {
+						ts: Number( data.ts ) || nowSec(),
+						mode: data.mode === MODE_TEAM ? MODE_TEAM : MODE_DM,
+					} );
 					// Answer so late arrivers see us during the gather window.
 					if ( this.role === 'searching' || this.role === 'host' ) {
 
-						this._busSend( { t: 'hello', pubkey: this.pk, ts: nowSec() } );
+						this._busSend( { t: 'hello', pubkey: this.pk, ts: nowSec(), mode: this.mode } );
 
 					}
 
@@ -546,11 +863,12 @@ class SosQuakeNet {
 		this.lastAnnounce = now();
 		const players = Math.min( MAX_HUMANS, 1 + this.peers.size );
 		const payload = {
-			v: 1,
+			v: 2,
 			room: this.pk,
 			players,
 			max: MAX_HUMANS,
 			map: this.map,
+			mode: this.mode,
 			closed: !! closed,
 		};
 
@@ -577,7 +895,7 @@ class SosQuakeNet {
 				const raw = localStorage.getItem( LS_ROOM_KEY );
 				const list = raw ? JSON.parse( raw ) : [];
 				const next = ( Array.isArray( list ) ? list : [] ).filter( ( r ) => r.pubkey !== this.pk );
-				next.push( { pubkey: this.pk, players, map: this.map, ts: nowSec() } );
+				next.push( { pubkey: this.pk, players, map: this.map, mode: this.mode, ts: nowSec() } );
 				localStorage.setItem( LS_ROOM_KEY, JSON.stringify( next ) );
 
 			} catch { /* ignore */ }
@@ -601,7 +919,12 @@ class SosQuakeNet {
 		// mutual tryJoin loops where nobody was actually hosting.
 		const cut = nowSec() - 20;
 		return [ ...this.rooms.values() ]
-			.filter( ( r ) => r.ts >= cut && r.players < MAX_HUMANS && r.pubkey !== this.pk )
+			.filter( ( r ) =>
+				r.ts >= cut
+				&& r.players < MAX_HUMANS
+				&& r.pubkey !== this.pk
+				&& ( r.mode || MODE_DM ) === this.mode,
+			)
 			.sort( ( a, b ) => b.players - a.players || b.ts - a.ts );
 
 	}
@@ -616,14 +939,21 @@ class SosQuakeNet {
 
 			if ( this.disposed || this.role !== 'searching' ) return;
 			this.setStatus( `Joining room (${ room.players }/${ MAX_HUMANS })…` );
+			if ( room.mode ) this.mode = room.mode;
 			if ( await this.tryJoin( room.pubkey, room.map ) ) return;
 
 		}
 
-		// 2) Elect a host among Play candidates (lowest pubkey hosts).
+		// 2) Elect a host among Play candidates in the same mode (lowest pubkey hosts).
 		const cut = nowSec() - 30;
 		const alive = [ ...this.candidates.entries() ]
-			.filter( ( [ , ts ] ) => ts >= cut )
+			.filter( ( [ , info ] ) => {
+
+				const ts = typeof info === 'number' ? info : info?.ts;
+				const mode = typeof info === 'number' ? MODE_DM : ( info?.mode || MODE_DM );
+				return ts >= cut && mode === this.mode;
+
+			} )
 			.map( ( [ pk ] ) => pk )
 			.sort();
 		if ( ! alive.includes( this.pk ) ) alive.push( this.pk );
@@ -659,10 +989,13 @@ class SosQuakeNet {
 
 		this.role = 'host';
 		this.hostSince = now();
-		this.setStatus( 'Hosting — starting map…' );
+		const team = this.mode === MODE_TEAM;
+		this.map = team ? TEAM_MAP : ( this.map || mapFromQuery() );
+		this.setStatus( team ? 'Hosting team game…' : 'Hosting — starting map…' );
 		// Publish the hall immediately so a simultaneous Play can still join.
 		this.announce();
 		this.hideUi();
+		M_ForceCloseMenu();
 		set_key_dest( key_game );
 		SCR_BeginLoadingPlaque();
 		// Prefetch BSP so late joiners (and host) don't hit the async reconnect path blind.
@@ -672,8 +1005,9 @@ class SosQuakeNet {
 			`disconnect\n` +
 			`maxplayers ${ MAX_HUMANS }\n` +
 			`listen 1\n` +
-			`deathmatch 1\n` +
-			`coop 0\n` +
+			`deathmatch ${ team ? 0 : 1 }\n` +
+			`coop ${ team ? 1 : 0 }\n` +
+			`teamplay ${ team ? 1 : 0 }\n` +
 			`map ${ this.map }\n`,
 		);
 		clearInterval( this.heartbeat );
@@ -685,7 +1019,7 @@ class SosQuakeNet {
 
 		}, HEARTBEAT_MS );
 		this.playBusy = false;
-		Con_Printf( 'SOS Quake: hosting P2P room on %s\n', this.map );
+		Con_Printf( 'SOS Quake: hosting %s P2P room on %s\n', team ? 'team' : 'deathmatch', this.map );
 
 	}
 
@@ -771,6 +1105,7 @@ class SosQuakeNet {
 				this.map = map || this.map;
 				this.setStatus( 'Connected — entering game…' );
 				this.hideUi();
+				M_ForceCloseMenu();
 				set_key_dest( key_game );
 				SCR_BeginLoadingPlaque();
 				const mapName = this.map;
@@ -1045,6 +1380,7 @@ export function SosQuake_Debug() {
 
 	return {
 		role: net?.role || 'none',
+		mode: net?.mode || null,
 		peers: net?.peers?.size || 0,
 		pk: net?.pk?.slice( 0, 8 ) || null,
 		map: net?.map || null,

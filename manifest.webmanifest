@@ -1,0 +1,18 @@
+{
+  "id": "./",
+  "name": "SOS Quake",
+  "short_name": "SOS Quake",
+  "description": "Browser Quake (three-quake) with one-tap P2P — Deathmatch or Team coop.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "categories": ["games"],
+  "icons": [
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

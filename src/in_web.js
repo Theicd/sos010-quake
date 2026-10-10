@@ -427,9 +427,10 @@ function handleMouseDown( event ) {
 
 	}
 
-	// During demo playback, click to show menu
+	// During demo playback, click to show menu (disabled in SOS lobby UI)
 	if ( key_dest === key_game && cls.demoplayback && event.button === 0 ) {
 
+		if ( typeof globalThis !== 'undefined' && globalThis.__sosQuakeNoDemoMenu ) return;
 		M_TouchInput( 0, 0, 1, 1 ); // Coordinates don't matter, just triggers menu toggle
 		return;
 
@@ -557,9 +558,10 @@ function handleTouchStart( event ) {
 
 	}
 
-	// During demo playback, tap to show menu
+	// During demo playback, tap to show menu (disabled in SOS lobby UI)
 	if ( key_dest === key_game && cls.demoplayback ) {
 
+		if ( typeof globalThis !== 'undefined' && globalThis.__sosQuakeNoDemoMenu ) return;
 		event.preventDefault();
 		M_TouchInput( 0, 0, 1, 1 ); // Coordinates don't matter, just triggers menu toggle
 
@@ -955,8 +957,7 @@ export function IN_UpdateTouch() {
 
 	} else if ( key_dest === key_game && cls.demoplayback ) {
 
-		// Demo playback - hide game controls, show menu overlay
-		// Tapping will trigger menu via M_TouchInput which sends Escape
+		// Demo playback - hide game controls; SOS lobby suppresses the classic menu overlay
 		if ( Touch_IsEnabled() ) {
 
 			Touch_Disable();
@@ -964,7 +965,15 @@ export function IN_UpdateTouch() {
 
 		}
 
-		Touch_ShowMenu();
+		if ( typeof globalThis !== 'undefined' && globalThis.__sosQuakeNoDemoMenu ) {
+
+			Touch_HideMenu();
+
+		} else {
+
+			Touch_ShowMenu();
+
+		}
 
 	} else if ( key_dest === key_menu ) {
 

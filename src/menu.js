@@ -518,6 +518,14 @@ export function M_ToggleMenu_f() {
 
 }
 
+/** Close any Quake menu without opening MAIN (used by SOS lobby / gear). */
+export function M_ForceCloseMenu() {
+
+	setKeyDest( key_game );
+	m_state = m_none;
+
+}
+
 /*
 ==============================================================================
 
@@ -1663,7 +1671,17 @@ function M_Options_Key( key ) {
 	switch ( key ) {
 
 		case K_ESCAPE:
-			M_Menu_Main_f();
+			// SOS lobby: leave options into the game, never the classic MAIN menu.
+			if ( typeof globalThis !== 'undefined' && globalThis.__sosQuakeNoDemoMenu ) {
+
+				M_ForceCloseMenu();
+
+			} else {
+
+				M_Menu_Main_f();
+
+			}
+
 			break;
 		case K_ENTER:
 			m_entersound = true;
