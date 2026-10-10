@@ -16,6 +16,7 @@ import { set_key_dest, key_game } from './keys.js';
 import {
 	RTC_SetPendingClient,
 	RTC_EnqueueIncoming,
+	RTC_AttachUnreliable,
 	RTC_ClearPendingClient,
 	RTC_DebugState,
 } from './net_webrtc.js';
@@ -727,12 +728,15 @@ class SosQuakeNet {
 
 			const pc = new RTCPeerConnection( RTC_CONFIG );
 			const sid = randId();
-			const channel = pc.createDataChannel( 'quake', { ordered: true } );
-			const peer = { pc, channel, sid, hostSide: false, pk: hostPk };
+			// Kart-style dual channels: ctl reliable, st unreliable movement/entities.
+			const ctl = pc.createDataChannel( 'ctl', { ordered: true } );
+			const st = pc.createDataChannel( 'st', { ordered: false, maxRetransmits: 0 } );
+			st.binaryType = 'arraybuffer';
+			const peer = { pc, ctl, st, sid, hostSide: false, pk: hostPk };
 			this.peers.set( hostPk, peer );
 
-			// Buffer Quake packets as soon as the channel exists (before open).
-			RTC_SetPendingClient( pc, channel, 'webrtc:' + hostPk.slice( 0, 8 ) );
+			// Buffer Quake packets as soon as channels exist (before open).
+			RTC_SetPendingClient( pc, ctl, st, 'webrtc:' + hostPk.slice( 0, 8 ) );
 
 			let settled = false;
 			const finish = ( ok ) => {
@@ -778,14 +782,14 @@ class SosQuakeNet {
 				this.setLamp( 2, 'on' );
 				this.playBusy = false;
 				finish( true );
-				Con_Printf( 'SOS Quake: joined P2P host\n' );
+				Con_Printf( 'SOS Quake: joined P2P host (ctl+st)\n' );
 
 			};
 
-			channel.addEventListener( 'open', enterGame );
-			if ( channel.readyState === 'open' ) enterGame();
+			ctl.addEventListener( 'open', enterGame );
+			if ( ctl.readyState === 'open' ) enterGame();
 
-			channel.addEventListener( 'close', () => {
+			ctl.addEventListener( 'close', () => {
 
 				if ( this.role === 'client' ) this.setStatus( 'Host disconnected' );
 
@@ -841,37 +845,65 @@ class SosQuakeNet {
 			if ( this.peers.has( from ) ) return;
 
 			const pc = new RTCPeerConnection( RTC_CONFIG );
-			const peer = { pc, channel: null, sid: m.sid, hostSide: true, pk: from };
+			const peer = {
+				pc, ctl: null, st: null, link: null, sid: m.sid, hostSide: true, pk: from, enqueued: false,
+			};
 			this.peers.set( from, peer );
 
 			pc.ondatachannel = ( e ) => {
 
-				if ( e.channel.label !== 'quake' ) return;
-				peer.channel = e.channel;
-				// Enqueue + buffer immediately (do not wait for onopen).
-				RTC_EnqueueIncoming( pc, e.channel, 'webrtc:' + from.slice( 0, 8 ) );
-				const markJoined = () => {
+				const ch = e.channel;
+				if ( ch.label === 'ctl' ) {
 
-					this.announce();
-					this.setStatus( `Players: ${ 1 + this.peers.size }/${ MAX_HUMANS }` );
-					this.setLamp( 1 + this.peers.size, 'on' );
-					Con_Printf( 'SOS Quake: peer channel open (%s)\n', from.slice( 0, 8 ) );
+					peer.ctl = ch;
+					ch.binaryType = 'arraybuffer';
 
-				};
-				e.channel.addEventListener( 'open', markJoined );
-				if ( e.channel.readyState === 'open' ) markJoined();
-				e.channel.addEventListener( 'close', () => {
+				} else if ( ch.label === 'st' ) {
 
-					this.dropPeer( from );
-					this.announce();
+					peer.st = ch;
+					ch.binaryType = 'arraybuffer';
 
-				} );
+				} else {
+
+					return;
+
+				}
+
+				if ( peer.ctl && ! peer.enqueued ) {
+
+					peer.enqueued = true;
+					peer.link = RTC_EnqueueIncoming(
+						pc, peer.ctl, peer.st, 'webrtc:' + from.slice( 0, 8 ),
+					);
+					const markJoined = () => {
+
+						this.announce();
+						this.setStatus( `Players: ${ 1 + this.peers.size }/${ MAX_HUMANS }` );
+						this.setLamp( 1 + this.peers.size, 'on' );
+						Con_Printf( 'SOS Quake: peer ctl open (%s)\n', from.slice( 0, 8 ) );
+
+					};
+					peer.ctl.addEventListener( 'open', markJoined );
+					if ( peer.ctl.readyState === 'open' ) markJoined();
+					peer.ctl.addEventListener( 'close', () => {
+
+						this.dropPeer( from );
+						this.announce();
+
+					} );
+
+				} else if ( peer.enqueued && peer.st && peer.link ) {
+
+					RTC_AttachUnreliable( peer.link, peer.st );
+					Con_Printf( 'SOS Quake: peer st attached (%s)\n', from.slice( 0, 8 ) );
+
+				}
 
 			};
 
 			setTimeout( () => {
 
-				if ( ! peer.channel || peer.channel.readyState !== 'open' ) this.dropPeer( from );
+				if ( ! peer.ctl || peer.ctl.readyState !== 'open' ) this.dropPeer( from );
 
 			}, JOIN_TIMEOUT_MS );
 
@@ -920,6 +952,18 @@ class SosQuakeNet {
 		const peer = this.peers.get( pk );
 		if ( ! peer ) return;
 		this.peers.delete( pk );
+		try {
+
+			peer.ctl?.close();
+
+		} catch { /* closed */ }
+
+		try {
+
+			peer.st?.close();
+
+		} catch { /* closed */ }
+
 		try {
 
 			peer.channel?.close();
