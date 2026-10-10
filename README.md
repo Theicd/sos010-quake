@@ -28,7 +28,7 @@ Top bar:
 | `?auto=1` | Press Play automatically |
 | `?mode=team` | Start in Team (coop) mode |
 | `?mode=dm` | Start in Deathmatch mode |
-| `?map=rapture1` | Host map name for Deathmatch (default `rapture1`; Team uses `start`) |
+| `?map=rapture1` | Force a specific host map (otherwise each game picks a random map) |
 | `?net=0` | Disable online matchmaking |
 | `?relay=1` | Force TURN for WebRTC |
 

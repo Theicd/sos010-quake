@@ -290,14 +290,19 @@ drawing routines are relative to the status bar location
 Sbar_DrawPic
 =============
 */
+function sbarXofs() {
+
+	// Always center the classic 320-wide status bar — deathmatch used to
+	// left-align it so the frag list could sit at x=324, which broke widescreen.
+	return ( _vid.width - 320 ) >> 1;
+
+}
+
 function Sbar_DrawPic( x, y, pic ) {
 
 	if ( ! _Draw_Pic || ! pic ) return;
 
-	if ( _cl.gametype === GAME_DEATHMATCH )
-		_Draw_Pic( x, y + ( _vid.height - SBAR_HEIGHT ), pic );
-	else
-		_Draw_Pic( x + ( ( _vid.width - 320 ) >> 1 ), y + ( _vid.height - SBAR_HEIGHT ), pic );
+	_Draw_Pic( x + sbarXofs(), y + ( _vid.height - SBAR_HEIGHT ), pic );
 
 }
 
@@ -310,10 +315,7 @@ function Sbar_DrawTransPic( x, y, pic ) {
 
 	if ( ! _Draw_TransPic || ! pic ) return;
 
-	if ( _cl.gametype === GAME_DEATHMATCH )
-		_Draw_TransPic( x, y + ( _vid.height - SBAR_HEIGHT ), pic );
-	else
-		_Draw_TransPic( x + ( ( _vid.width - 320 ) >> 1 ), y + ( _vid.height - SBAR_HEIGHT ), pic );
+	_Draw_TransPic( x + sbarXofs(), y + ( _vid.height - SBAR_HEIGHT ), pic );
 
 }
 
@@ -328,10 +330,7 @@ function Sbar_DrawCharacter( x, y, num ) {
 
 	if ( ! _Draw_Character ) return;
 
-	if ( _cl.gametype === GAME_DEATHMATCH )
-		_Draw_Character( x + 4, y + _vid.height - SBAR_HEIGHT, num );
-	else
-		_Draw_Character( x + ( ( _vid.width - 320 ) >> 1 ) + 4, y + _vid.height - SBAR_HEIGHT, num );
+	_Draw_Character( x + sbarXofs() + 4, y + _vid.height - SBAR_HEIGHT, num );
 
 }
 
@@ -344,17 +343,9 @@ function Sbar_DrawString( x, y, str ) {
 
 	if ( ! _Draw_Character ) return;
 
-	if ( _cl.gametype === GAME_DEATHMATCH ) {
-
-		for ( let i = 0; i < str.length; i ++ )
-			_Draw_Character( x + i * 8, y + _vid.height - SBAR_HEIGHT, str.charCodeAt( i ) );
-
-	} else {
-
-		for ( let i = 0; i < str.length; i ++ )
-			_Draw_Character( x + ( ( _vid.width - 320 ) >> 1 ) + i * 8, y + _vid.height - SBAR_HEIGHT, str.charCodeAt( i ) );
-
-	}
+	const xofs = sbarXofs();
+	for ( let i = 0; i < str.length; i ++ )
+		_Draw_Character( x + xofs + i * 8, y + _vid.height - SBAR_HEIGHT, str.charCodeAt( i ) );
 
 }
 
@@ -530,11 +521,7 @@ function Sbar_DrawFrags() {
 	const l = scoreboardlines <= 4 ? scoreboardlines : 4;
 
 	let x = 23;
-	let xofs;
-	if ( _cl.gametype === GAME_DEATHMATCH )
-		xofs = 0;
-	else
-		xofs = ( _vid.width - 320 ) >> 1;
+	const xofs = sbarXofs();
 	const y = _vid.height - SBAR_HEIGHT - 23;
 
 	for ( let i = 0; i < l; i ++ ) {
@@ -995,7 +982,10 @@ export function Sbar_MiniDeathmatchOverlay() {
 	if ( i < 0 )
 		i = 0;
 
-	const x = 324;
+	// Sit in the right margin beside the centered status bar (not under it).
+	let x = sbarXofs() + 324;
+	if ( x + 160 > _vid.width )
+		x = Math.max( 8, _vid.width - 168 );
 	for ( ; i < scoreboardlines && y < _vid.height - 8; i ++ ) {
 
 		const k = fragsort[ i ];

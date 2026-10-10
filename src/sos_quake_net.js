@@ -32,7 +32,6 @@ export const ROOM_TAG = 'sos_quake_v2';
 const KIND_ROOM = 33214;
 const KIND_SIGNAL = 25214;
 const UPSTREAM_GITHUB = 'https://github.com/mrdoob/three-quake';
-const TEAM_MAP = 'start';
 const MODE_DM = 'dm';
 const MODE_TEAM = 'team';
 const RELAYS = [
@@ -66,6 +65,10 @@ const LISTEN_MS = 3_500;
 const JOIN_TIMEOUT_MS = 14_000;
 const ICE_WAIT_MS = 4_000;
 const DEFAULT_MAP = 'rapture1';
+/** Community deathmatch maps shipped under /maps. */
+const DM_MAPS = [ 'rapture1', 'spinev2', 'naked5', 'zed', 'efdm9', 'baldm6', 'edc', 'ultrav' ];
+/** Shareware episode maps for Team / coop. */
+const TEAM_MAPS = [ 'start', 'e1m1', 'e1m2', 'e1m3', 'e1m4', 'e1m5', 'e1m6', 'e1m7', 'e1m8' ];
 /** Extra wait (0–2.5s) so two Play presses don't both become host. */
 const HOST_STAGGER_MAX_MS = 2_500;
 const BUS_NAME = 'sos_quake_v2_bus';
@@ -124,7 +127,16 @@ function readName() {
 function mapFromQuery() {
 
 	const m = new URLSearchParams( location.search ).get( 'map' );
-	return m && /^[a-z0-9_]+$/i.test( m ) ? m : DEFAULT_MAP;
+	return m && /^[a-z0-9_]+$/i.test( m ) ? m : null;
+
+}
+
+function pickRandomMap( mode ) {
+
+	const forced = mapFromQuery();
+	if ( forced ) return forced;
+	const pool = mode === MODE_TEAM ? TEAM_MAPS : DM_MAPS;
+	return pool[ Math.floor( Math.random() * pool.length ) ] || DEFAULT_MAP;
 
 }
 
@@ -180,6 +192,7 @@ const CSS = `
   pointer-events: none;
   font-family: "Segoe UI", system-ui, sans-serif;
 }
+#sos-quake-chrome.hide { display: none !important; }
 #sos-quake-chrome a, #sos-quake-chrome button {
   pointer-events: auto; width: 44px; height: 44px; border-radius: 12px;
   display: grid; place-items: center; border: 1px solid rgba(255,255,255,.16);
@@ -306,7 +319,7 @@ class SosQuakeNet {
 		this.lastAnnounce = 0;
 		this.timers = [];
 		this.mode = readMode();
-		this.map = this.mode === MODE_TEAM ? TEAM_MAP : mapFromQuery();
+		this.map = pickRandomMap( this.mode );
 		this.ui = null;
 		this.chrome = null;
 		this.lamp = null;
@@ -429,7 +442,7 @@ class SosQuakeNet {
 
 		const next = mode === MODE_TEAM ? MODE_TEAM : MODE_DM;
 		this.mode = next;
-		this.map = next === MODE_TEAM ? TEAM_MAP : mapFromQuery();
+		this.map = pickRandomMap( next );
 		try {
 
 			localStorage.setItem( LS_MODE_KEY, next );
@@ -584,12 +597,15 @@ class SosQuakeNet {
 	hideUi() {
 
 		if ( this.ui ) this.ui.classList.add( 'hide' );
+		if ( this.chrome ) this.chrome.classList.add( 'hide' );
+		document.getElementById( 'sos-quake-idlg' )?.classList.remove( 'show' );
 
 	}
 
 	showUi() {
 
 		if ( this.ui ) this.ui.classList.remove( 'hide' );
+		if ( this.chrome ) this.chrome.classList.remove( 'hide' );
 
 	}
 
@@ -637,6 +653,7 @@ class SosQuakeNet {
 
 	soloFallback() {
 
+		this.map = pickRandomMap( this.mode );
 		this.hideUi();
 		M_ForceCloseMenu();
 		set_key_dest( key_game );
@@ -990,8 +1007,8 @@ class SosQuakeNet {
 		this.role = 'host';
 		this.hostSince = now();
 		const team = this.mode === MODE_TEAM;
-		this.map = team ? TEAM_MAP : ( this.map || mapFromQuery() );
-		this.setStatus( team ? 'Hosting team game…' : 'Hosting — starting map…' );
+		this.map = pickRandomMap( this.mode );
+		this.setStatus( team ? `Hosting team · ${ this.map }…` : `Hosting · ${ this.map }…` );
 		// Publish the hall immediately so a simultaneous Play can still join.
 		this.announce();
 		this.hideUi();
@@ -1121,8 +1138,28 @@ class SosQuakeNet {
 
 			};
 
-			ctl.addEventListener( 'open', enterGame );
-			if ( ctl.readyState === 'open' ) enterGame();
+			// Wait for unreliable `st` so clc_move never falls back onto ordered ctl (HOL stalls).
+			const tryEnter = () => {
+
+				if ( settled ) return;
+				if ( ctl.readyState !== 'open' ) return;
+				if ( st.readyState === 'open' ) {
+
+					enterGame();
+					return;
+
+				}
+
+			};
+			ctl.addEventListener( 'open', tryEnter );
+			st.addEventListener( 'open', tryEnter );
+			if ( ctl.readyState === 'open' && st.readyState === 'open' ) tryEnter();
+			// Fallback: start on ctl alone if st is slow (AttachUnreliable still wires it later).
+			setTimeout( () => {
+
+				if ( ! settled && ctl.readyState === 'open' ) enterGame();
+
+			}, 2_000 );
 
 			ctl.addEventListener( 'close', () => {
 
@@ -1185,6 +1222,38 @@ class SosQuakeNet {
 			};
 			this.peers.set( from, peer );
 
+			const armPeer = () => {
+
+				if ( ! peer.ctl || peer.enqueued ) return;
+				// Prefer both channels so entity snapshots + moves share the unreliable path.
+				if ( ! peer.st && peer.ctl.readyState !== 'open' ) return;
+				peer.enqueued = true;
+				peer.link = RTC_EnqueueIncoming(
+					pc, peer.ctl, peer.st, 'webrtc:' + from.slice( 0, 8 ),
+				);
+				const markJoined = () => {
+
+					this.announce();
+					this.setStatus( `Players: ${ 1 + this.peers.size }/${ MAX_HUMANS }` );
+					this.setLamp( 1 + this.peers.size, 'on' );
+					Con_Printf(
+						'SOS Quake: peer ready (%s) st=%s\n',
+						from.slice( 0, 8 ),
+						peer.st ? 'yes' : 'no',
+					);
+
+				};
+				peer.ctl.addEventListener( 'open', markJoined );
+				if ( peer.ctl.readyState === 'open' ) markJoined();
+				peer.ctl.addEventListener( 'close', () => {
+
+					this.dropPeer( from );
+					this.announce();
+
+				} );
+
+			};
+
 			pc.ondatachannel = ( e ) => {
 
 				const ch = e.channel;
@@ -1204,33 +1273,20 @@ class SosQuakeNet {
 
 				}
 
-				if ( peer.ctl && ! peer.enqueued ) {
+				if ( peer.ctl && peer.st && ! peer.enqueued ) {
 
-					peer.enqueued = true;
-					peer.link = RTC_EnqueueIncoming(
-						pc, peer.ctl, peer.st, 'webrtc:' + from.slice( 0, 8 ),
-					);
-					const markJoined = () => {
-
-						this.announce();
-						this.setStatus( `Players: ${ 1 + this.peers.size }/${ MAX_HUMANS }` );
-						this.setLamp( 1 + this.peers.size, 'on' );
-						Con_Printf( 'SOS Quake: peer ctl open (%s)\n', from.slice( 0, 8 ) );
-
-					};
-					peer.ctl.addEventListener( 'open', markJoined );
-					if ( peer.ctl.readyState === 'open' ) markJoined();
-					peer.ctl.addEventListener( 'close', () => {
-
-						this.dropPeer( from );
-						this.announce();
-
-					} );
+					armPeer();
 
 				} else if ( peer.enqueued && peer.st && peer.link ) {
 
 					RTC_AttachUnreliable( peer.link, peer.st );
 					Con_Printf( 'SOS Quake: peer st attached (%s)\n', from.slice( 0, 8 ) );
+
+				} else if ( peer.ctl && ! peer.enqueued ) {
+
+					// ctl first — wait briefly for st, then accept ctl-only.
+					clearTimeout( peer._stWait );
+					peer._stWait = setTimeout( () => armPeer(), 400 );
 
 				}
 

@@ -22,8 +22,10 @@ let pendingClient = null;
 /** Host side: remote peers ready to accept. */
 const pendingIncoming = [];
 
-/** Drop unreliable sends when the SCTP buffer is this full (Kart uses 16KB). */
-const ST_BUFFERED_LIMIT = 16 * 1024;
+/** Back-pressure large unreliable bursts (entity snapshots). Kart uses 16KB. */
+const ST_BUFFERED_LIMIT = 32 * 1024;
+/** Tiny datagrams (clc_move ~30B) always send — dropping them causes local stutter. */
+const ST_ALWAYS_SEND_MAX = 128;
 
 class RtcLink {
 
@@ -426,7 +428,8 @@ export function RTC_QGetMessage( sock ) {
 function sendOn( ch, data, length ) {
 
 	if ( ! ch || ch.readyState !== 'open' ) return - 1;
-	if ( ch.bufferedAmount > ST_BUFFERED_LIMIT ) return 0; // still valid, try later
+	// Never stall move/command packets on buffer pressure; only gate fat snapshots.
+	if ( length > ST_ALWAYS_SEND_MAX && ch.bufferedAmount > ST_BUFFERED_LIMIT ) return 0;
 
 	try {
 
@@ -503,7 +506,8 @@ export function RTC_CanSendUnreliableMessage( sock ) {
 	const link = sock.driverdata;
 	if ( ! link ) return false;
 	const ch = ( link.st && link.st.readyState === 'open' ) ? link.st : link.channel;
-	return !!( ch && ch.readyState === 'open' && ch.bufferedAmount <= ST_BUFFERED_LIMIT );
+	// Moves are small and always allowed; large snapshots still respect the buffer.
+	return !!( ch && ch.readyState === 'open' );
 
 }
 
