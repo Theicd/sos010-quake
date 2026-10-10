@@ -334,16 +334,40 @@ export function CL_ParseServerInfo() {
 	if ( nummodels > 1 && COM_FindFile( model_precache[ 1 ] ) === null ) {
 
 		const addr = cls.netcon != null ? cls.netcon.address : null;
+		const netcon = cls.netcon;
 		Con_Printf( 'Fetching %s...\n', model_precache[ 1 ] );
-		COM_EnsureFile( model_precache[ 1 ] ).then( ( success ) => {
+		COM_EnsureFile( model_precache[ 1 ] ).then( async ( success ) => {
 
-			if ( success && addr != null ) {
-
-				Cbuf_AddText( 'connect "' + addr + '"\n' );
-
-			} else {
+			if ( ! success ) {
 
 				Con_Printf( 'Couldn\'t fetch %s\n', model_precache[ 1 ] );
+				return;
+
+			}
+
+			// WebRTC listen-server: tearing down the DataChannel loses the peer.
+			// Arm reuse, then reconnect on the same link.
+			if ( netcon && addr && String( addr ).startsWith( 'webrtc' ) ) {
+
+				try {
+
+					const { RTC_ArmReconnect } = await import( './net_webrtc.js' );
+					RTC_ArmReconnect( netcon );
+
+				} catch ( e ) {
+
+					Con_Printf( 'WebRTC reconnect arm failed\n' );
+
+				}
+
+				Cbuf_AddText( 'connect webrtc\n' );
+				return;
+
+			}
+
+			if ( addr != null ) {
+
+				Cbuf_AddText( 'connect "' + addr + '"\n' );
 
 			}
 

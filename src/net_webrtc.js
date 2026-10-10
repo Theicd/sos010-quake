@@ -1,6 +1,9 @@
 // WebRTC net driver — listen-server in the browser (SOS P2P).
 // Star topology: host runs the Quake server; clients talk only to the host.
 // Transport mirrors the WebTransport reliable path: [len:u16le][payload].
+//
+// Important: message handlers are attached as soon as a channel is handed to
+// this driver (before Quake binds a qsocket), so early signon bytes are not lost.
 
 import { Con_Printf, Con_DPrintf, SZ_Clear, SZ_Write } from './common.js';
 import { NET_NewQSocket } from './net_main.js';
@@ -13,7 +16,7 @@ let listening = false;
 /** Client side: channel prepared by SosQuakeNet before `connect webrtc`. */
 let pendingClient = null;
 
-/** Host side: remote peers whose data channel just opened. */
+/** Host side: remote peers whose data channel is ready to accept. */
 const pendingIncoming = [];
 
 class RtcLink {
@@ -22,7 +25,7 @@ class RtcLink {
 
 		this.pc = pc;
 		this.channel = channel;
-		this.connected = channel.readyState === 'open';
+		this.connected = channel && channel.readyState === 'open';
 		this.error = null;
 		this.pendingMessages = [];
 		this.rx = new Uint8Array( 0 );
@@ -32,67 +35,81 @@ class RtcLink {
 
 }
 
-function wireChannel( sock, link ) {
+function feedBytes( link, chunk ) {
 
-	if ( link._wired ) return;
+	const merged = new Uint8Array( link.rx.length + chunk.length );
+	merged.set( link.rx );
+	merged.set( chunk, link.rx.length );
+	link.rx = merged;
+
+	while ( link.rx.length >= 2 ) {
+
+		const length = link.rx[ 0 ] | ( link.rx[ 1 ] << 8 );
+		if ( length <= 0 || length > NET_MAXMESSAGE ) {
+
+			link.rx = new Uint8Array( 0 );
+			link.connected = false;
+			link.error = new Error( 'bad frame length' );
+			return;
+
+		}
+
+		if ( link.rx.length < 2 + length ) break;
+
+		const data = link.rx.subarray( 2, 2 + length );
+		link.pendingMessages.push( { reliable: true, data: new Uint8Array( data ) } );
+		link.rx = link.rx.subarray( 2 + length );
+
+	}
+
+}
+
+/** Attach onmessage immediately so bytes that arrive before qsocket bind are kept. */
+function wireChannel( link ) {
+
+	if ( ! link || link._wired || ! link.channel ) return;
 	link._wired = true;
 	const ch = link.channel;
 
 	ch.binaryType = 'arraybuffer';
 
-	ch.onopen = () => {
+	ch.addEventListener( 'open', () => {
 
 		link.connected = true;
 
-	};
+	} );
 
-	ch.onclose = () => {
+	ch.addEventListener( 'close', () => {
 
 		link.connected = false;
 
-	};
+	} );
 
-	ch.onerror = () => {
+	ch.addEventListener( 'error', () => {
 
 		link.connected = false;
 		link.error = new Error( 'datachannel error' );
 
-	};
+	} );
 
-	ch.onmessage = ( ev ) => {
+	ch.addEventListener( 'message', ( ev ) => {
 
 		const chunk = ev.data instanceof ArrayBuffer
 			? new Uint8Array( ev.data )
 			: new Uint8Array( ev.data.buffer, ev.data.byteOffset, ev.data.byteLength );
+		feedBytes( link, chunk );
 
-		const merged = new Uint8Array( link.rx.length + chunk.length );
-		merged.set( link.rx );
-		merged.set( chunk, link.rx.length );
-		link.rx = merged;
-
-		while ( link.rx.length >= 2 ) {
-
-			const length = link.rx[ 0 ] | ( link.rx[ 1 ] << 8 );
-			if ( length <= 0 || length > NET_MAXMESSAGE ) {
-
-				link.rx = new Uint8Array( 0 );
-				link.connected = false;
-				link.error = new Error( 'bad frame length' );
-				return;
-
-			}
-
-			if ( link.rx.length < 2 + length ) break;
-
-			const data = link.rx.subarray( 2, 2 + length );
-			link.pendingMessages.push( { reliable: true, data: new Uint8Array( data ) } );
-			link.rx = link.rx.subarray( 2 + length );
-
-		}
-
-	};
+	} );
 
 	if ( ch.readyState === 'open' ) link.connected = true;
+
+}
+
+function makeLink( pc, channel ) {
+
+	const link = new RtcLink( pc, channel );
+	wireChannel( link );
+	return link;
 
 }
 
@@ -101,6 +118,7 @@ function bindSocket( link, address ) {
 	const sock = NET_NewQSocket();
 	if ( ! sock ) {
 
+		Con_Printf( 'RTC bindSocket: no free qsocket (maxclients/active full)\n' );
 		try {
 
 			link.pc.close();
@@ -114,27 +132,56 @@ function bindSocket( link, address ) {
 	sock.address = address || 'webrtc';
 	sock.driver = net_driverlevel;
 	sock.driverdata = link;
-	wireChannel( sock, link );
+	sock.lastMessageTime = performance.now() / 1000;
 	connections.set( sock, link );
+	Con_DPrintf( 'RTC qsocket bound (%s) queued=%d\n', sock.address, link.pendingMessages.length );
 	return sock;
 
 }
 
 /**
- * SosQuakeNet calls this after the client data channel opens.
+ * SosQuakeNet calls this as soon as the client data channel exists (often on open).
+ * Bytes are buffered immediately.
  */
 export function RTC_SetPendingClient( pc, channel, address = 'webrtc-host' ) {
 
-	pendingClient = { pc, channel, address };
+	if ( pendingClient?.link ) {
+
+		// replace — close previous unused link
+		try {
+
+			pendingClient.pc.close();
+
+		} catch ( e ) { /* closed */ }
+
+	}
+
+	pendingClient = { pc, channel, address, link: makeLink( pc, channel ) };
 
 }
 
 /**
- * SosQuakeNet calls this on the host when a remote peer's channel opens.
+ * SosQuakeNet calls this on the host when a remote peer's channel appears.
+ * Prefer calling this from ondatachannel (not only onopen) so early bytes buffer.
  */
 export function RTC_EnqueueIncoming( pc, channel, address = 'webrtc-peer' ) {
 
-	pendingIncoming.push( { pc, channel, address } );
+	// Avoid double-enqueue of the same channel
+	for ( const item of pendingIncoming ) {
+
+		if ( item.channel === channel ) return item.link;
+
+	}
+
+	for ( const link of connections.values() ) {
+
+		if ( link.channel === channel ) return link;
+
+	}
+
+	const link = makeLink( pc, channel );
+	pendingIncoming.push( { pc, channel, address, link } );
+	return link;
 
 }
 
@@ -144,9 +191,40 @@ export function RTC_ClearPendingClient() {
 
 }
 
+/**
+ * Before a Quake `connect webrtc` reconnect (e.g. after fetching a BSP), keep the
+ * live DataChannel across NET_Close so signon can restart without a new offer.
+ */
+export function RTC_ArmReconnect( sock ) {
+
+	if ( ! sock || ! sock.driverdata ) return false;
+	const link = sock.driverdata;
+	link._reuse = true;
+	pendingClient = {
+		pc: link.pc,
+		channel: link.channel,
+		address: sock.address || 'webrtc',
+		link,
+	};
+	return true;
+
+}
+
 export function RTC_PendingIncomingCount() {
 
 	return pendingIncoming.length;
+
+}
+
+export function RTC_DebugState() {
+
+	return {
+		listening,
+		pendingIncoming: pendingIncoming.length,
+		hasPendingClient: !! pendingClient,
+		connections: connections.size,
+		queued: [ ...connections.values() ].map( ( l ) => l.pendingMessages.length ),
+	};
 
 }
 
@@ -196,6 +274,7 @@ export function RTC_Shutdown() {
 export function RTC_Listen( state ) {
 
 	listening = !! state;
+	Con_DPrintf( 'RTC_Listen: %s\n', listening ? '1' : '0' );
 
 }
 
@@ -212,7 +291,7 @@ export function RTC_Connect( host ) {
 
 	const pending = pendingClient;
 	pendingClient = null;
-	if ( ! pending || ! pending.channel ) {
+	if ( ! pending || ! pending.channel || ! pending.link ) {
 
 		Con_Printf( 'RTC_Connect: no pending WebRTC channel\n' );
 		return Promise.resolve( null );
@@ -223,15 +302,12 @@ export function RTC_Connect( host ) {
 
 		const finish = () => {
 
-			const sock = bindSocket(
-				new RtcLink( pending.pc, pending.channel ),
-				pending.address || host,
-			);
+			const sock = bindSocket( pending.link, pending.address || host );
 			resolve( sock );
 
 		};
 
-		if ( pending.channel.readyState === 'open' ) {
+		if ( pending.channel.readyState === 'open' || pending.link.connected ) {
 
 			finish();
 			return;
@@ -262,9 +338,11 @@ export function RTC_CheckNewConnections() {
 		return null;
 
 	const next = pendingIncoming.shift();
-	const sock = bindSocket( new RtcLink( next.pc, next.channel ), next.address );
+	const sock = bindSocket( next.link, next.address );
 	if ( sock )
 		Con_Printf( 'WebRTC peer accepted (%s)\n', next.address );
+	else
+		Con_Printf( 'WebRTC peer rejected — no free socket\n' );
 
 	return sock;
 
@@ -292,7 +370,7 @@ export function RTC_QGetMessage( sock ) {
 
 function sendFrame( link, data, length ) {
 
-	if ( ! link || ! link.connected || ! link.channel || link.channel.readyState !== 'open' )
+	if ( ! link || ! link.channel || link.channel.readyState !== 'open' )
 		return - 1;
 
 	const frame = new Uint8Array( 2 + length );
@@ -303,6 +381,7 @@ function sendFrame( link, data, length ) {
 	try {
 
 		link.channel.send( frame );
+		link.connected = true;
 
 	} catch ( e ) {
 
@@ -320,7 +399,7 @@ function sendFrame( link, data, length ) {
 export function RTC_QSendMessage( sock, data ) {
 
 	const link = sock.driverdata;
-	if ( ! link || ! link.connected ) return - 1;
+	if ( ! link ) return - 1;
 	if ( link.error ) {
 
 		link.connected = false;
@@ -334,7 +413,6 @@ export function RTC_QSendMessage( sock, data ) {
 
 export function RTC_SendUnreliableMessage( sock, data ) {
 
-	// Single reliable channel — same stability choice as the WT client path.
 	return RTC_QSendMessage( sock, data );
 
 }
@@ -342,7 +420,7 @@ export function RTC_SendUnreliableMessage( sock, data ) {
 export function RTC_CanSendMessage( sock ) {
 
 	const link = sock.driverdata;
-	return !!( link && link.connected && link.channel && link.channel.readyState === 'open' );
+	return !!( link && link.channel && link.channel.readyState === 'open' && ! link.error );
 
 }
 
@@ -358,6 +436,16 @@ export function RTC_Close( sock ) {
 	connections.delete( sock );
 	if ( ! link ) return;
 
+	sock.driverdata = null;
+
+	// Armed for reconnect — keep the RTCPeerConnection / DataChannel alive.
+	if ( link._reuse ) {
+
+		link._reuse = false;
+		return;
+
+	}
+
 	try {
 
 		link.channel.close();
@@ -371,7 +459,6 @@ export function RTC_Close( sock ) {
 	} catch ( e ) { /* closed */ }
 
 	link.connected = false;
-	sock.driverdata = null;
 
 }
 

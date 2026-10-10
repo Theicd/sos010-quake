@@ -17,10 +17,13 @@ import {
 	RTC_SetPendingClient,
 	RTC_EnqueueIncoming,
 	RTC_ClearPendingClient,
+	RTC_DebugState,
 } from './net_webrtc.js';
-import { svs } from './server.js';
+import { sv, svs } from './server.js';
+import { cls } from './client.js';
 import { SV_LinkEdict } from './world.js';
 import { VectorCopy } from './mathlib.js';
+import { COM_EnsureFile } from './pak.js';
 
 export const ROOM_TAG = 'sos_quake_v1';
 const KIND_ROOM = 33214;
@@ -50,12 +53,16 @@ const RTC_CONFIG = {
 
 const MAX_HUMANS = 4;
 const ROOM_TTL = 45;
-const HEARTBEAT_MS = 10_000;
-const ANNOUNCE_GAP_MS = 2_000;
-const LISTEN_MS = 2_500;
+const HEARTBEAT_MS = 3_000;
+const ANNOUNCE_GAP_MS = 1_500;
+const LISTEN_MS = 3_500;
 const JOIN_TIMEOUT_MS = 14_000;
 const ICE_WAIT_MS = 4_000;
 const DEFAULT_MAP = 'rapture1';
+/** Extra wait (0–2.5s) so two Play presses don't both become host. */
+const HOST_STAGGER_MAX_MS = 2_500;
+const BUS_NAME = 'sos_quake_v1_bus';
+const LS_ROOM_KEY = 'sos_quake_v1_rooms';
 
 const now = () => Date.now();
 const nowSec = () => Math.floor( now() / 1000 );
@@ -195,6 +202,12 @@ class SosQuakeNet {
 		this.ui = null;
 		this.lamp = null;
 		this.playBusy = false;
+		this.bus = null;
+		/** @type {Map<string, number>} pubkey -> last hello ts */
+		this.candidates = new Map();
+		this.hostSince = 0;
+		this.joining = false;
+		this._ingestRoom = this._ingestRoom.bind( this );
 
 	}
 
@@ -308,9 +321,11 @@ class SosQuakeNet {
 		this.setStatus( 'Looking for a room…' );
 		this.setLamp( 1, 'search' );
 		this.listen();
+		this.candidates.set( this.pk, nowSec() );
+		this._busSend( { t: 'hello', pubkey: this.pk, ts: nowSec() } );
 		this.timers.push( window.setTimeout(
 			() => void this.matchmake(),
-			this.liveRooms().length ? 350 : LISTEN_MS,
+			this.liveRooms().length ? 600 : LISTEN_MS,
 		) );
 
 	}
@@ -324,7 +339,7 @@ class SosQuakeNet {
 
 	}
 
-	// ------------------------------------------------------------------ nostr
+	// --------------------------------------------------------- discovery/net
 
 	convKey( pk ) {
 
@@ -340,35 +355,127 @@ class SosQuakeNet {
 
 	}
 
+	_ingestRoom( pubkey, c, ts ) {
+
+		if ( ! pubkey || pubkey === this.pk ) return;
+		if ( c?.closed ) {
+
+			this.rooms.delete( pubkey );
+			this._persistLocalRooms();
+			return;
+
+		}
+
+		const prev = this.rooms.get( pubkey );
+		if ( prev && prev.ts > ts ) return;
+		this.rooms.set( pubkey, {
+			pubkey,
+			players: Math.max( 1, Math.min( MAX_HUMANS, Number( c.players ) || 1 ) ),
+			map: typeof c.map === 'string' ? c.map : DEFAULT_MAP,
+			ts,
+		} );
+		this._persistLocalRooms();
+
+	}
+
+	_persistLocalRooms() {
+
+		try {
+
+			const cut = nowSec() - ROOM_TTL;
+			const list = [ ...this.rooms.values() ].filter( ( r ) => r.ts >= cut );
+			localStorage.setItem( LS_ROOM_KEY, JSON.stringify( list ) );
+
+		} catch { /* private mode */ }
+
+	}
+
+	_loadLocalRooms() {
+
+		try {
+
+			const raw = localStorage.getItem( LS_ROOM_KEY );
+			if ( ! raw ) return;
+			const list = JSON.parse( raw );
+			if ( ! Array.isArray( list ) ) return;
+			for ( const r of list ) {
+
+				if ( r?.pubkey ) this._ingestRoom( r.pubkey, r, Number( r.ts ) || nowSec() );
+
+			}
+
+		} catch { /* ignore */ }
+
+	}
+
+	_busSend( msg ) {
+
+		try {
+
+			this.bus?.postMessage( msg );
+
+		} catch { /* ignore */ }
+
+	}
+
 	listen() {
 
 		if ( this.subs.length ) return;
 
+		this._loadLocalRooms();
+
+		// Same-origin / multi-tab discovery (also carries SDP when Nostr is slow).
+		try {
+
+			this.bus = new BroadcastChannel( BUS_NAME );
+			this.bus.onmessage = ( ev ) => {
+
+				const data = ev?.data;
+				if ( ! data || typeof data !== 'object' ) return;
+				if ( data.t === 'hello' && data.pubkey && data.pubkey !== this.pk ) {
+
+					this.candidates.set( data.pubkey, Number( data.ts ) || nowSec() );
+					// Answer so late arrivers see us during the gather window.
+					if ( this.role === 'searching' || this.role === 'host' ) {
+
+						this._busSend( { t: 'hello', pubkey: this.pk, ts: nowSec() } );
+
+					}
+
+				} else if ( data.t === 'room' ) {
+
+					this._ingestRoom( data.pubkey, data, Number( data.ts ) || nowSec() );
+
+				} else if ( data.t === 'signal' && data.to === this.pk && data.from && data.msg ) {
+
+					void this.onSignal( data.from, data.msg );
+
+				}
+
+			};
+
+		} catch { /* BroadcastChannel unavailable */ }
+
+		try {
+
+			addEventListener( 'storage', ( e ) => {
+
+				if ( e.key === LS_ROOM_KEY ) this._loadLocalRooms();
+
+			} );
+
+		} catch { /* ignore */ }
+
+		// Filters MUST be an array — a bare object is not iterable in nostr-tools.
 		this.subs.push( this.pool.subscribeMany(
 			RELAYS,
-			{ kinds: [ KIND_ROOM ], '#t': [ ROOM_TAG ], since: nowSec() - 60 },
+			[ { kinds: [ KIND_ROOM ], '#t': [ ROOM_TAG ], since: nowSec() - 60 } ],
 			{
 				onevent: ( ev ) => {
 
-					if ( ev.pubkey === this.pk ) return;
 					try {
 
-						const c = JSON.parse( ev.content );
-						if ( c.closed ) {
-
-							this.rooms.delete( ev.pubkey );
-							return;
-
-						}
-
-						const prev = this.rooms.get( ev.pubkey );
-						if ( prev && prev.ts > ev.created_at ) return;
-						this.rooms.set( ev.pubkey, {
-							pubkey: ev.pubkey,
-							players: Math.max( 1, Math.min( MAX_HUMANS, Number( c.players ) || 1 ) ),
-							map: typeof c.map === 'string' ? c.map : DEFAULT_MAP,
-							ts: ev.created_at,
-						} );
+						this._ingestRoom( ev.pubkey, JSON.parse( ev.content ), ev.created_at );
 
 					} catch { /* ignore */ }
 
@@ -378,7 +485,7 @@ class SosQuakeNet {
 
 		this.subs.push( this.pool.subscribeMany(
 			RELAYS,
-			{ kinds: [ KIND_SIGNAL ], '#p': [ this.pk ], since: nowSec() - 10 },
+			[ { kinds: [ KIND_SIGNAL ], '#p': [ this.pk ], since: nowSec() - 10 } ],
 			{
 				onevent: ( ev ) => {
 
@@ -404,6 +511,9 @@ class SosQuakeNet {
 	}
 
 	signal( to, msg ) {
+
+		// Local bus first (instant for same device / two tabs).
+		this._busSend( { t: 'signal', to, from: this.pk, msg } );
 
 		const ev = finalizeEvent( {
 			kind: KIND_SIGNAL,
@@ -434,18 +544,50 @@ class SosQuakeNet {
 
 		this.lastAnnounce = now();
 		const players = Math.min( MAX_HUMANS, 1 + this.peers.size );
+		const payload = {
+			v: 1,
+			room: this.pk,
+			players,
+			max: MAX_HUMANS,
+			map: this.map,
+			closed: !! closed,
+		};
+
+		this._busSend( { t: 'room', pubkey: this.pk, ts: nowSec(), ...payload } );
+		if ( closed ) {
+
+			try {
+
+				const raw = localStorage.getItem( LS_ROOM_KEY );
+				const list = raw ? JSON.parse( raw ) : [];
+				localStorage.setItem(
+					LS_ROOM_KEY,
+					JSON.stringify( ( Array.isArray( list ) ? list : [] ).filter( ( r ) => r.pubkey !== this.pk ) ),
+				);
+
+			} catch { /* ignore */ }
+
+		} else {
+
+			this._persistLocalRooms();
+			// Also mirror self into localStorage so a late tab can see us before bus messages.
+			try {
+
+				const raw = localStorage.getItem( LS_ROOM_KEY );
+				const list = raw ? JSON.parse( raw ) : [];
+				const next = ( Array.isArray( list ) ? list : [] ).filter( ( r ) => r.pubkey !== this.pk );
+				next.push( { pubkey: this.pk, players, map: this.map, ts: nowSec() } );
+				localStorage.setItem( LS_ROOM_KEY, JSON.stringify( next ) );
+
+			} catch { /* ignore */ }
+
+		}
+
 		const ev = finalizeEvent( {
 			kind: KIND_ROOM,
 			created_at: nowSec(),
 			tags: [ [ 'd', ROOM_TAG ], [ 't', ROOM_TAG ] ],
-			content: JSON.stringify( {
-				v: 1,
-				room: this.pk,
-				players,
-				max: MAX_HUMANS,
-				map: this.map,
-				closed: !! closed,
-			} ),
+			content: JSON.stringify( payload ),
 		}, this.sk );
 		void Promise.allSettled( this.pool.publish( RELAYS, ev ) );
 		this.setLamp( players, closed ? '' : 'on' );
@@ -454,20 +596,57 @@ class SosQuakeNet {
 
 	liveRooms() {
 
-		const cut = nowSec() - ROOM_TTL;
+		// Only trust very fresh announcements — stale localStorage entries caused
+		// mutual tryJoin loops where nobody was actually hosting.
+		const cut = nowSec() - 20;
 		return [ ...this.rooms.values() ]
-			.filter( ( r ) => r.ts >= cut && r.players < MAX_HUMANS )
+			.filter( ( r ) => r.ts >= cut && r.players < MAX_HUMANS && r.pubkey !== this.pk )
 			.sort( ( a, b ) => b.players - a.players || b.ts - a.ts );
 
 	}
 
 	async matchmake() {
 
+		if ( this.disposed || this.role !== 'searching' ) return;
+		this._loadLocalRooms();
+
+		// 1) Prefer a room that is actively hosting right now.
 		for ( const room of this.liveRooms() ) {
 
 			if ( this.disposed || this.role !== 'searching' ) return;
 			this.setStatus( `Joining room (${ room.players }/${ MAX_HUMANS })…` );
 			if ( await this.tryJoin( room.pubkey, room.map ) ) return;
+
+		}
+
+		// 2) Elect a host among Play candidates (lowest pubkey hosts).
+		const cut = nowSec() - 30;
+		const alive = [ ...this.candidates.entries() ]
+			.filter( ( [ , ts ] ) => ts >= cut )
+			.map( ( [ pk ] ) => pk )
+			.sort();
+		if ( ! alive.includes( this.pk ) ) alive.push( this.pk );
+		alive.sort();
+		const leader = alive[ 0 ];
+
+		if ( leader !== this.pk ) {
+
+			this.setStatus( 'Waiting for host…' );
+			for ( let i = 0; i < 20; i ++ ) {
+
+				if ( this.disposed || this.role !== 'searching' ) return;
+				await new Promise( ( r ) => setTimeout( r, 400 ) );
+				this._loadLocalRooms();
+				const room = this.liveRooms().find( ( r ) => r.pubkey === leader )
+					|| this.liveRooms()[ 0 ];
+				if ( room ) {
+
+					this.setStatus( `Joining room (${ room.players }/${ MAX_HUMANS })…` );
+					if ( await this.tryJoin( room.pubkey, room.map ) ) return;
+
+				}
+
+			}
 
 		}
 
@@ -478,10 +657,15 @@ class SosQuakeNet {
 	becomeHost() {
 
 		this.role = 'host';
+		this.hostSince = now();
 		this.setStatus( 'Hosting — starting map…' );
+		// Publish the hall immediately so a simultaneous Play can still join.
+		this.announce();
 		this.hideUi();
 		set_key_dest( key_game );
 		SCR_BeginLoadingPlaque();
+		// Prefetch BSP so late joiners (and host) don't hit the async reconnect path blind.
+		void COM_EnsureFile( 'maps/' + this.map + '.bsp' );
 		Cbuf_AddText(
 			`name "${ readName() }"\n` +
 			`disconnect\n` +
@@ -491,12 +675,12 @@ class SosQuakeNet {
 			`coop 0\n` +
 			`map ${ this.map }\n`,
 		);
-		this.announce();
 		clearInterval( this.heartbeat );
 		this.heartbeat = window.setInterval( () => {
 
 			if ( this.role !== 'host' || this.disposed ) return;
 			this.announce();
+			void this.mergeLoneHost();
 
 		}, HEARTBEAT_MS );
 		this.playBusy = false;
@@ -504,7 +688,40 @@ class SosQuakeNet {
 
 	}
 
+	/**
+	 * Two lone hosts: the higher pubkey abandons and joins the lower one
+	 * (same rule as Kart Royale), so players end up in one session.
+	 */
+	async mergeLoneHost() {
+
+		if ( this.role !== 'host' || this.peers.size > 0 || this.disposed || this.joining ) return;
+		// Give the hall a few seconds to attract joiners before merging.
+		if ( now() - this.hostSince < 6_000 ) return;
+		const target = this.liveRooms().find( ( r ) => r.pubkey < this.pk );
+		if ( ! target ) return;
+
+		Con_Printf( 'SOS Quake: merging into host %s\n', target.pubkey.slice( 0, 8 ) );
+		this.setStatus( 'Merging into another room…' );
+		this.announce( true );
+		clearInterval( this.heartbeat );
+		this.role = 'searching';
+		Cbuf_AddText( 'disconnect\n' );
+		await new Promise( ( r ) => setTimeout( r, 400 ) );
+		if ( this.disposed ) return;
+		const ok = await this.tryJoin( target.pubkey, target.map || this.map );
+		if ( ! ok && ! this.disposed ) {
+
+			Con_Printf( 'SOS Quake: merge failed — hosting again\n' );
+			this.becomeHost();
+
+		}
+
+	}
+
 	tryJoin( hostPk, map ) {
+
+		if ( this.joining || hostPk === this.pk ) return Promise.resolve( false );
+		this.joining = true;
 
 		return new Promise( ( resolve ) => {
 
@@ -514,15 +731,20 @@ class SosQuakeNet {
 			const peer = { pc, channel, sid, hostSide: false, pk: hostPk };
 			this.peers.set( hostPk, peer );
 
+			// Buffer Quake packets as soon as the channel exists (before open).
+			RTC_SetPendingClient( pc, channel, 'webrtc:' + hostPk.slice( 0, 8 ) );
+
 			let settled = false;
 			const finish = ( ok ) => {
 
 				if ( settled ) return;
 				settled = true;
+				this.joining = false;
 				clearTimeout( timer );
 				if ( ! ok ) {
 
 					this.peers.delete( hostPk );
+					RTC_ClearPendingClient();
 					try {
 
 						pc.close();
@@ -538,16 +760,21 @@ class SosQuakeNet {
 			const timer = setTimeout( () => finish( false ), JOIN_TIMEOUT_MS );
 			peer.fail = () => finish( false );
 
-			channel.onopen = () => {
+			const enterGame = () => {
 
-				RTC_SetPendingClient( pc, channel, 'webrtc:' + hostPk.slice( 0, 8 ) );
+				if ( settled ) return;
 				this.role = 'client';
 				this.map = map || this.map;
 				this.setStatus( 'Connected — entering game…' );
 				this.hideUi();
 				set_key_dest( key_game );
 				SCR_BeginLoadingPlaque();
-				Cbuf_AddText( `name "${ readName() }"\nconnect webrtc\n` );
+				const mapName = this.map;
+				void COM_EnsureFile( 'maps/' + mapName + '.bsp' ).finally( () => {
+
+					Cbuf_AddText( `name "${ readName() }"\nconnect webrtc\n` );
+
+				} );
 				this.setLamp( 2, 'on' );
 				this.playBusy = false;
 				finish( true );
@@ -555,11 +782,14 @@ class SosQuakeNet {
 
 			};
 
-			channel.onclose = () => {
+			channel.addEventListener( 'open', enterGame );
+			if ( channel.readyState === 'open' ) enterGame();
+
+			channel.addEventListener( 'close', () => {
 
 				if ( this.role === 'client' ) this.setStatus( 'Host disconnected' );
 
-			};
+			} );
 
 			void ( async () => {
 
@@ -618,19 +848,24 @@ class SosQuakeNet {
 
 				if ( e.channel.label !== 'quake' ) return;
 				peer.channel = e.channel;
-				e.channel.onopen = () => {
+				// Enqueue + buffer immediately (do not wait for onopen).
+				RTC_EnqueueIncoming( pc, e.channel, 'webrtc:' + from.slice( 0, 8 ) );
+				const markJoined = () => {
 
-					RTC_EnqueueIncoming( pc, e.channel, 'webrtc:' + from.slice( 0, 8 ) );
 					this.announce();
 					this.setStatus( `Players: ${ 1 + this.peers.size }/${ MAX_HUMANS }` );
+					this.setLamp( 1 + this.peers.size, 'on' );
+					Con_Printf( 'SOS Quake: peer channel open (%s)\n', from.slice( 0, 8 ) );
 
 				};
-				e.channel.onclose = () => {
+				e.channel.addEventListener( 'open', markJoined );
+				if ( e.channel.readyState === 'open' ) markJoined();
+				e.channel.addEventListener( 'close', () => {
 
 					this.dropPeer( from );
 					this.announce();
 
-				};
+				} );
 
 			};
 
@@ -743,11 +978,54 @@ class SosQuakeNet {
 
 let net = null;
 
+export function SosQuake_Debug() {
+
+	const clients = [];
+	if ( svs?.clients ) {
+
+		for ( let i = 0; i < ( svs.maxclients || 0 ); i ++ ) {
+
+			const c = svs.clients[ i ];
+			if ( ! c ) continue;
+			clients.push( {
+				i,
+				active: !! c.active,
+				spawned: !! c.spawned,
+				name: c.name || '',
+				addr: c.netconnection?.address || null,
+			} );
+
+		}
+
+	}
+
+	return {
+		role: net?.role || 'none',
+		peers: net?.peers?.size || 0,
+		pk: net?.pk?.slice( 0, 8 ) || null,
+		map: net?.map || null,
+		svActive: !! sv?.active,
+		maxclients: svs?.maxclients || 0,
+		clsState: cls?.state,
+		signon: cls?.signon,
+		clients,
+		rtc: RTC_DebugState(),
+	};
+
+}
+
 export function SosQuake_Start() {
 
 	if ( net ) return net;
 	net = new SosQuakeNet();
 	net.start();
+
+	try {
+
+		window.__sosQuakeDebug = SosQuake_Debug;
+		window.__sosQuakePlay = () => net.play();
+
+	} catch { /* non-browser */ }
 
 	const solo = new URLSearchParams( location.search ).get( 'solo' );
 	const auto = new URLSearchParams( location.search ).get( 'auto' );
