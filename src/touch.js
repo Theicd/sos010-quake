@@ -65,10 +65,11 @@ const BTN_BASE = `
 	font-weight: 700;
 	letter-spacing: 0.06em;
 	text-transform: uppercase;
-	color: rgba(255, 236, 196, 0.92);
-	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-	backdrop-filter: blur(10px);
-	-webkit-backdrop-filter: blur(10px);
+	color: #ffffff;
+	background: transparent;
+	box-shadow: none;
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
 	user-select: none;
 	-webkit-user-select: none;
 `;
@@ -172,7 +173,7 @@ function Touch_CreateUI( container ) {
 	weapButton.type = 'button';
 	weapButton.id = 'sos-touch-weap';
 	weapButton.setAttribute( 'aria-label', 'Next weapon' );
-	weapButton.innerHTML = '<span style="font-size:15px;line-height:1">⇄</span><span style="font-size:9px;opacity:.85">Weap</span>';
+	weapButton.innerHTML = '<span style="font-size:15px;line-height:1;color:#fff">⇄</span><span style="font-size:9px;color:#fff">Weap</span>';
 	weapButton.style.cssText = BTN_BASE + `
 		position: fixed;
 		right: 12px;
@@ -180,8 +181,8 @@ function Touch_CreateUI( container ) {
 		width: 52px;
 		height: 52px;
 		z-index: 320;
-		background: radial-gradient(circle at 35% 30%, rgba(255, 214, 120, 0.5), rgba(80, 52, 12, 0.72));
-		border: 1px solid rgba(214, 178, 98, 0.65);
+		background: transparent;
+		border: 2px solid rgba(255, 214, 120, 0.85);
 	`;
 	// Notch / status-bar safe inset when supported
 	try {
@@ -206,29 +207,29 @@ function Touch_CreateUI( container ) {
 	fireButton = document.createElement( 'button' );
 	fireButton.type = 'button';
 	fireButton.setAttribute( 'aria-label', 'Fire' );
-	fireButton.innerHTML = '<span style="font-size:18px;line-height:1">◈</span><span style="font-size:9px;opacity:.85">Fire</span>';
+	fireButton.innerHTML = '<span style="font-size:18px;line-height:1;color:#fff">◈</span><span style="font-size:9px;color:#fff">Fire</span>';
 	fireButton.style.cssText = BTN_BASE + `
 		position: absolute;
 		right: 0;
 		bottom: 28px;
 		width: 72px;
 		height: 72px;
-		background: radial-gradient(circle at 35% 30%, rgba(255, 120, 90, 0.55), rgba(120, 28, 18, 0.72));
-		border: 1px solid rgba(255, 170, 120, 0.55);
+		background: transparent;
+		border: 2px solid rgba(255, 120, 100, 0.9);
 	`;
 
 	jumpButton = document.createElement( 'button' );
 	jumpButton.type = 'button';
 	jumpButton.setAttribute( 'aria-label', 'Jump' );
-	jumpButton.innerHTML = '<span style="font-size:16px;line-height:1">▴</span><span style="font-size:9px;opacity:.85">Jump</span>';
+	jumpButton.innerHTML = '<span style="font-size:16px;line-height:1;color:#fff">▴</span><span style="font-size:9px;color:#fff">Jump</span>';
 	jumpButton.style.cssText = BTN_BASE + `
 		position: absolute;
 		left: 0;
 		bottom: 0;
 		width: 60px;
 		height: 60px;
-		background: radial-gradient(circle at 35% 30%, rgba(120, 170, 255, 0.5), rgba(24, 48, 96, 0.72));
-		border: 1px solid rgba(160, 200, 255, 0.5);
+		background: transparent;
+		border: 2px solid rgba(140, 190, 255, 0.9);
 	`;
 
 	actionCluster.appendChild( jumpButton );
