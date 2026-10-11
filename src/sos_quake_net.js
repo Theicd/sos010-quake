@@ -67,53 +67,13 @@ const ANNOUNCE_GAP_MS = 1_500;
 const LISTEN_MS = 3_500;
 const JOIN_TIMEOUT_MS = 14_000;
 const ICE_WAIT_MS = 4_000;
-const DEFAULT_MAP = 'e1m1';
+const DEFAULT_MAP = 'start';
+/** Shareware episode maps for Team / coop — random pick (no real levelshots in pak0). */
+const TEAM_MAPS = [ 'start', 'e1m1', 'e1m2', 'e1m3', 'e1m4', 'e1m5', 'e1m6', 'e1m7', 'e1m8' ];
 /** Extra wait (0–2.5s) so two Play presses don't both become host. */
 const HOST_STAGGER_MAX_MS = 2_500;
 const BUS_NAME = 'sos_quake_v3_bus';
 const LS_ROOM_KEY = 'sos_quake_v3_rooms';
-
-/**
- * Host-selectable arenas (shareware episode). Cards use stylized art + short blurbs —
- * Quake shareware has no levelshot images in the pak.
- */
-const ARENA_WORLDS = [
-	{
-		id: 'e1m1',
-		title: 'Slipgate Complex',
-		blurb: 'Base breach. Tight corridors, shotgun angles, first taste of hell.',
-		art: 'linear-gradient(145deg,#1a2a3a 0%,#3d5a40 45%,#c4a35a 100%)',
-		accent: '#7ec8ff',
-	},
-	{
-		id: 'e1m3',
-		title: 'The Necropolis',
-		blurb: 'Crypts and catwalks. Ambush heaven for a fireteam that sticks together.',
-		art: 'linear-gradient(160deg,#1a1218 0%,#4a2030 50%,#8b4513 100%)',
-		accent: '#e8a0a0',
-	},
-	{
-		id: 'e1m4',
-		title: 'Grisly Grotto',
-		blurb: 'Cavern firefights. Rockets echo off the walls — armor hides in the dark.',
-		art: 'linear-gradient(135deg,#0d1f18 0%,#2d5a3d 55%,#a67c52 100%)',
-		accent: '#90e0b0',
-	},
-	{
-		id: 'e1m5',
-		title: 'Gloom Keep',
-		blurb: 'Castle siege. Vertical fights, thunderbolts upstairs, grenades below.',
-		art: 'linear-gradient(150deg,#121018 0%,#3a2a4a 48%,#d4a03a 100%)',
-		accent: '#d0b0ff',
-	},
-	{
-		id: 'e1m7',
-		title: 'House of Chthon',
-		blurb: 'Boss house. Bring friends, bring rockets, and do not look down.',
-		art: 'linear-gradient(170deg,#1a0808 0%,#6b1a1a 40%,#ff6a00 100%)',
-		accent: '#ffaa66',
-	},
-];
 
 /** Cool pickups scattered across the map once the host (or solo) spawns in. */
 const STARTER_LOOT = [
@@ -136,12 +96,6 @@ const STARTER_LOOT = [
 const now = () => Date.now();
 const nowSec = () => Math.floor( now() / 1000 );
 const randId = () => Math.random().toString( 36 ).slice( 2, 10 );
-
-function arenaById( id ) {
-
-	return ARENA_WORLDS.find( ( a ) => a.id === id ) || null;
-
-}
 
 function waitIce( pc ) {
 
@@ -195,20 +149,11 @@ function mapFromQuery() {
 
 }
 
-function defaultArenaId() {
-
-	const forced = mapFromQuery();
-	if ( forced && arenaById( forced ) ) return forced;
-	if ( forced ) return forced;
-	return ARENA_WORLDS[ 0 ]?.id || DEFAULT_MAP;
-
-}
-
 function pickRandomMap() {
 
 	const forced = mapFromQuery();
 	if ( forced ) return forced;
-	return ARENA_WORLDS[ Math.floor( Math.random() * ARENA_WORLDS.length ) ]?.id || DEFAULT_MAP;
+	return TEAM_MAPS[ Math.floor( Math.random() * TEAM_MAPS.length ) ] || DEFAULT_MAP;
 
 }
 
@@ -378,67 +323,25 @@ const CSS = `
 }
 #sos-quake-ui.hide { display: none !important; }
 #sos-quake-ui .panel {
-  pointer-events: auto; width: min(560px, calc(100% - 28px));
-  margin: 0 14px calc(14px + env(safe-area-inset-bottom, 0px));
-  padding: 16px 16px 14px;
+  pointer-events: auto; width: min(420px, calc(100% - 28px));
+  margin: 0 14px calc(18px + env(safe-area-inset-bottom, 0px));
+  padding: 18px 18px 16px;
   border: 1px solid rgba(214, 178, 98, .45);
   border-radius: 14px;
-  background: rgba(12, 10, 8, .82);
+  background: rgba(12, 10, 8, .78);
   box-shadow: 0 18px 50px rgba(0,0,0,.55);
   backdrop-filter: blur(10px);
-  max-height: min(92vh, 760px); overflow: auto;
 }
 #sos-quake-ui .brand {
   font-size: 11px; letter-spacing: .28em; text-transform: uppercase;
   color: #d6b262; margin-bottom: 6px;
 }
 #sos-quake-ui h1 {
-  font-size: 1.45rem; line-height: 1.1; margin: 0 0 6px; font-weight: 800;
+  font-size: 1.55rem; line-height: 1.1; margin: 0 0 6px; font-weight: 800;
   letter-spacing: -0.02em; color: #ffe7a8;
 }
 #sos-quake-ui .plot {
-  font-size: 13px; line-height: 1.45; color: #cbb996; margin-bottom: 10px;
-}
-#sos-quake-ui .arena-label {
-  font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
-  color: #d6b262; margin: 0 0 8px; font-weight: 700;
-}
-#sos-quake-ui .arenas {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
-  margin: 0 0 12px;
-}
-@media (min-width: 520px) {
-  #sos-quake-ui .arenas { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-#sos-quake-ui .arena {
-  appearance: none; -webkit-appearance: none; border: 1px solid rgba(255,255,255,.14);
-  border-radius: 12px; padding: 0; overflow: hidden; cursor: pointer; text-align: start;
-  background: rgba(255,255,255,.04); color: inherit; display: flex; flex-direction: column;
-  transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease;
-}
-#sos-quake-ui .arena:hover { border-color: rgba(255,230,160,.4); transform: translateY(-1px); }
-#sos-quake-ui .arena.on {
-  border-color: rgba(214,178,98,.85);
-  box-shadow: 0 0 0 1px rgba(214,178,98,.35), 0 10px 24px rgba(0,0,0,.35);
-}
-#sos-quake-ui .arena .shot {
-  height: 72px; position: relative; background-size: cover; background-position: center;
-}
-#sos-quake-ui .arena .shot::after {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(180deg, transparent 30%, rgba(0,0,0,.72) 100%);
-}
-#sos-quake-ui .arena .shot .tag {
-  position: absolute; z-index: 1; left: 8px; bottom: 6px;
-  font: 800 11px/1 system-ui, sans-serif; letter-spacing: .06em; text-transform: uppercase;
-  color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.8);
-}
-#sos-quake-ui .arena .body { padding: 8px 9px 10px; }
-#sos-quake-ui .arena .body h3 {
-  margin: 0 0 4px; font: 800 12px/1.2 system-ui, sans-serif; color: #ffe7a8;
-}
-#sos-quake-ui .arena .body p {
-  margin: 0; font: 600 11px/1.35 system-ui, sans-serif; color: #b9a888;
+  font-size: 13px; line-height: 1.45; color: #cbb996; margin-bottom: 14px;
 }
 #sos-quake-ui .status {
   min-height: 1.2em; font-size: 12px; color: #9ad0ff; margin-bottom: 10px; font-weight: 600;
@@ -515,8 +418,7 @@ class SosQuakeNet {
 		this.lastAnnounce = 0;
 		this.timers = [];
 		this.mode = MODE_TEAM;
-		this.map = defaultArenaId();
-		this.selectedArena = arenaById( this.map ) ? this.map : ( ARENA_WORLDS[ 0 ]?.id || DEFAULT_MAP );
+		this.map = pickRandomMap();
 		this.lootScatteredFor = null;
 		this.ui = null;
 		this.chrome = null;
@@ -566,26 +468,13 @@ class SosQuakeNet {
 		document.body.appendChild( chrome );
 		this.chrome = chrome;
 
-		const arenasHtml = ARENA_WORLDS.map( ( a ) => `
-			<button type="button" class="arena${ a.id === this.selectedArena ? ' on' : '' }" data-arena="${ a.id }" aria-pressed="${ a.id === this.selectedArena ? 'true' : 'false' }">
-				<div class="shot" style="background:${ a.art }">
-					<span class="tag" style="color:${ a.accent }">${ a.id.toUpperCase() }</span>
-				</div>
-				<div class="body">
-					<h3>${ a.title }</h3>
-					<p>${ a.blurb }</p>
-				</div>
-			</button>` ).join( '' );
-
 		const root = document.createElement( 'div' );
 		root.id = 'sos-quake-ui';
 		root.innerHTML = `
 			<div class="panel">
 				<div class="brand">SOS · Three.js Quake</div>
 				<h1>Team</h1>
-				<p class="plot">Pick an arena, then tap Play — 2–4 players team up over P2P against the monsters. The first host’s world wins; joiners load that map. Cool weapons &amp; armor scatter across the floor at start.</p>
-				<div class="arena-label">Choose arena</div>
-				<div class="arenas" id="sos-quake-arenas">${ arenasHtml }</div>
+				<p class="plot">Tap Play — 2–4 players team up over P2P against the monsters. Join an open hall or host if empty. Map is random each game; cool weapons &amp; armor scatter across the floor at start.</p>
 				<div class="status" id="sos-quake-status">Ready</div>
 				<div class="row">
 					<button type="button" class="btn" id="sos-quake-play">Play</button>
@@ -595,7 +484,6 @@ class SosQuakeNet {
 		`;
 		document.body.appendChild( root );
 		this.ui = root;
-		this.bindArenaPicker();
 
 		const lamp = document.createElement( 'div' );
 		lamp.id = 'sos-quake-lamp';
@@ -826,33 +714,6 @@ class SosQuakeNet {
 
 	}
 
-	bindArenaPicker() {
-
-		const wrap = this.ui?.querySelector( '#sos-quake-arenas' );
-		if ( ! wrap ) return;
-		wrap.addEventListener( 'click', ( e ) => {
-
-			const btn = e.target.closest?.( '.arena' );
-			if ( ! btn || this.playBusy || this.role === 'host' || this.role === 'client' ) return;
-			const id = btn.getAttribute( 'data-arena' );
-			if ( ! id || ! arenaById( id ) ) return;
-			this.selectedArena = id;
-			this.map = id;
-			for ( const el of wrap.querySelectorAll( '.arena' ) ) {
-
-				const on = el.getAttribute( 'data-arena' ) === id;
-				el.classList.toggle( 'on', on );
-				el.setAttribute( 'aria-pressed', on ? 'true' : 'false' );
-
-			}
-
-			const arena = arenaById( id );
-			this.setStatus( arena ? `Arena: ${ arena.title }` : `Arena: ${ id }` );
-
-		} );
-
-	}
-
 	setStatus( text ) {
 
 		const el = document.getElementById( 'sos-quake-status' );
@@ -929,7 +790,7 @@ class SosQuakeNet {
 
 	soloFallback() {
 
-		this.map = mapFromQuery() || this.selectedArena || pickRandomMap();
+		this.map = pickRandomMap();
 		this.lootScatteredFor = null;
 		this.hideUi();
 		M_ForceCloseMenu();
@@ -1285,10 +1146,9 @@ class SosQuakeNet {
 		this.role = 'host';
 		this.hostSince = now();
 		this.mode = MODE_TEAM;
-		this.map = mapFromQuery() || this.selectedArena || pickRandomMap();
+		this.map = pickRandomMap();
 		this.lootScatteredFor = null;
-		const arena = arenaById( this.map );
-		this.setStatus( arena ? `Hosting · ${ arena.title }…` : `Hosting team · ${ this.map }…` );
+		this.setStatus( `Hosting team · ${ this.map }…` );
 		// Publish the hall immediately so a simultaneous Play can still join.
 		this.announce();
 		this.hideUi();
