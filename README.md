@@ -7,9 +7,10 @@ Live: https://theicd.github.io/sos010-quake/
 ## Play
 
 1. Open the link.
-2. Tap **Play** (Team coop — players vs monsters, up to 4).
-3. If someone is already in a room, you join their map session (spawn next to them).
-4. If not, you host a listen server and others can join.
+2. Choose an **arena** (preview card + short blurb).
+3. Tap **Play** (Team coop — players vs monsters, up to 4).
+4. If someone is already in a room, you join **their** arena (spawn next to them).
+5. If not, you host that arena; cool weapons & armor scatter across the map at start.
 
 No accounts. Matchmaking uses Nostr discovery + WebRTC data channels (same approach as SOS Kart / Chess).
 
@@ -25,7 +26,7 @@ Top bar:
 |-------|--------|
 | `?solo=1` | Skip matchmaking, start a local game |
 | `?auto=1` | Press Play automatically |
-| `?map=e1m1` | Force a specific host map (otherwise each game picks a random episode map) |
+| `?map=e1m1` | Force a specific host map (overrides the arena picker) |
 | `?net=0` | Disable online matchmaking |
 | `?relay=1` | Force TURN for WebRTC |
 
