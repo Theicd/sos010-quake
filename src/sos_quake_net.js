@@ -200,57 +200,12 @@ function spawnLootEntity( classname, origin ) {
 }
 
 /**
- * Drop cool weapons / armor around the map so the opening minutes feel hotter.
- * Host (or solo listen) only — entities replicate to joiners automatically.
+ * Extra map loot — disabled for now. Spawning QuakeC items after (or during)
+ * load proved fragile across cached deploys; keep Play reliable first.
  */
-function scatterStarterLoot( mapName ) {
+function scatterStarterLoot( _mapName ) {
 
-	if ( ! sv?.active ) return 0;
-	const anchors = collectLootAnchors();
-	if ( anchors.length < 2 ) return 0;
-
-	const bag = STARTER_LOOT.slice();
-	for ( let i = bag.length - 1; i > 0; i -- ) {
-
-		const j = Math.floor( Math.random() * ( i + 1 ) );
-		const tmp = bag[ i ];
-		bag[ i ] = bag[ j ];
-		bag[ j ] = tmp;
-
-	}
-
-	let placed = 0;
-	const used = new Set();
-	for ( let n = 0; n < bag.length; n ++ ) {
-
-		const classname = bag[ n ];
-		let best = null;
-		for ( let tries = 0; tries < 12; tries ++ ) {
-
-			const base = anchors[ Math.floor( Math.random() * anchors.length ) ];
-			const ang = Math.random() * Math.PI * 2;
-			const dist = 56 + Math.random() * 140;
-			const pos = [
-				base[ 0 ] + Math.cos( ang ) * dist,
-				base[ 1 ] + Math.sin( ang ) * dist,
-				base[ 2 ] + 8,
-			];
-			const key = `${ ( pos[ 0 ] / 48 ) | 0 }:${ ( pos[ 1 ] / 48 ) | 0 }`;
-			if ( used.has( key ) ) continue;
-			used.add( key );
-			best = pos;
-			break;
-
-		}
-
-		if ( ! best ) continue;
-		if ( spawnLootEntity( classname, best ) ) placed ++;
-
-	}
-
-	if ( placed > 0 )
-		Con_Printf( 'SOS Quake: scattered %d starter pickups on %s\n', placed, mapName || sv.name || '?' );
-	return placed;
+	return 0;
 
 }
 
@@ -461,7 +416,7 @@ class SosQuakeNet {
 			<div class="panel">
 				<div class="brand">SOS · Three.js Quake</div>
 				<h1>Team</h1>
-				<p class="plot">Tap Play — 2–4 players team up over P2P against the monsters. Join an open hall or host if empty. Map is random each game; cool weapons &amp; armor scatter across the floor at start.</p>
+				<p class="plot">Tap Play — 2–4 players team up over P2P against the monsters. Join an open hall or host if empty. Map is random each game.</p>
 				<div class="status" id="sos-quake-status">Ready</div>
 				<div class="row">
 					<button type="button" class="btn" id="sos-quake-play">Play</button>
