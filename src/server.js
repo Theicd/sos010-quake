@@ -137,6 +137,8 @@ export class client_t {
 		// QW-style delta compression
 		this.delta_sequence = - 1; // -1 = no compression
 		this.outgoing_sequence = 0; // incremented each frame we send to this client
+		/** Last clc_moveseq from this client (-1 = none yet). Echoed as svc_moveack. */
+		this.last_move_sequence = - 1;
 		this.frames = [];
 		for ( let i = 0; i < PE_UPDATE_BACKUP; i ++ ) {
 

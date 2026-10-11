@@ -2,7 +2,7 @@
 
 import { Sys_Printf } from './sys.js';
 import { Con_Printf, Con_DPrintf, MSG_ReadFloat, MSG_ReadAngle, MSG_ReadShort,
-	MSG_ReadByte, MSG_ReadChar, MSG_ReadString, MSG_BeginReading,
+	MSG_ReadByte, MSG_ReadChar, MSG_ReadLong, MSG_ReadString, MSG_BeginReading,
 	msg_badread, net_message } from './common.js';
 import { vec3_origin, DotProduct, VectorCopy, VectorAdd, VectorSubtract,
 	VectorMA, VectorScale, VectorNormalize, Length, AngleVectors, M_PI } from './mathlib.js';
@@ -66,6 +66,7 @@ export const clc_disconnect = 2;
 export const clc_move = 3;
 export const clc_stringcmd = 4;
 export const clc_delta = 5; // [byte] sequence number, requests delta compression
+export const clc_moveseq = 6; // [long] prediction command sequence (SOS / WebRTC)
 
 export function SV_User_SetCallbacks( callbacks ) {
 
@@ -632,6 +633,10 @@ export function SV_ReadClientMessage() {
 
 				case clc_delta:
 					host_client.delta_sequence = MSG_ReadByte();
+					break;
+
+				case clc_moveseq:
+					host_client.last_move_sequence = MSG_ReadLong() | 0;
 					break;
 
 				case clc_stringcmd: {

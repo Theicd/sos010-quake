@@ -42,7 +42,7 @@ import {
 	U_MODEL, U_FRAME, U_COLORMAP, U_SKIN, U_EFFECTS,
 	U_LONGENTITY, U_NOLERP,
 	DEFAULT_SOUND_PACKET_VOLUME, DEFAULT_SOUND_PACKET_ATTENUATION,
-	svc_packetentities, svc_deltapacketentities, svc_serversequence,
+	svc_packetentities, svc_deltapacketentities, svc_serversequence, svc_moveack,
 	PE_ENT_BITS, PE_ENT_MASK, PE_ORIGIN1, PE_ORIGIN2, PE_ORIGIN3,
 	PE_ANGLE2, PE_REMOVE, PE_MOREBITS,
 	PE_FRAME, PE_ANGLE1, PE_ANGLE3, PE_MODEL, PE_COLORMAP, PE_SKIN, PE_EFFECTS, PE_SOLID,
@@ -57,10 +57,10 @@ import { VectorCopy } from './mathlib.js';
 import { V_ParseDamage } from './view.js';
 import { Mod_ForName } from './gl_model.js';
 import { CL_SetServerState, CL_AcknowledgeCommand, CL_AcknowledgeTransportSequence,
-	CL_FindAcknowledgedSequence,
+	CL_FindAcknowledgedSequence, CL_MarkMoveAck,
 	CL_SetValidSequence, CL_SetPlayerInfo,
 	CL_GetServerSequence, CL_SetServerSequence, CL_GetFrame, CL_GetEntityFrame,
-	CL_GetValidSequence } from './cl_pred.js';
+	CL_GetValidSequence, CL_HadRecentMoveAck } from './cl_pred.js';
 import { R_TranslatePlayerSkin } from './gl_rmisc.js';
 
 // QuakeWorld model precache indices (set during CL_ParseServerInfo)
@@ -1052,12 +1052,9 @@ export function CL_ParseClientdata( bits ) {
 	//
 	if ( cl.viewentity >= 1 && cl.viewentity < cl_entities.length ) {
 
-		// QuakeWorld-style reconciliation baseline.
-		// WebTransport: sequenced headers update receiveSequence/ackSequence.
-		// WebRTC: receiveSequence stays -1 (no headers). A default ackSequence of 0
-		// would match every command's netsequence and collapse prediction → stutter
-		// on remote clients (host skips prediction via sv.active).
-		if ( cls.netcon != null ) {
+		// Reconciliation baseline. Prefer svc_moveack (explicit server-applied cmd)
+		// when present this datagram; otherwise transport/time estimates.
+		if ( cls.netcon != null && ! CL_HadRecentMoveAck() ) {
 
 			const ackSeq = cls.netcon.ackSequence | 0;
 			const wireSequenced = ( cls.netcon.receiveSequence | 0 ) >= 0;
@@ -1491,6 +1488,15 @@ export function CL_ParseServerMessage() {
 			case svc_serversequence:
 				CL_SetServerSequence( MSG_ReadLong() );
 				break;
+
+			case svc_moveack: {
+
+				const moveSeq = MSG_ReadLong() | 0;
+				CL_AcknowledgeCommand( moveSeq );
+				CL_MarkMoveAck();
+				break;
+
+			}
 
 			case svc_packetentities:
 				CL_ParsePacketEntities( false );

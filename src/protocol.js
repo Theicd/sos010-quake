@@ -168,6 +168,11 @@ export const svc_deltapacketentities = 48; // [...]
 export const svc_serversequence = 49; // [long] server frame sequence number
 
 export const clc_delta = 5; // [byte] sequence number, requests delta compression
+/** SOS/WebRTC: [long] client prediction command sequence for the preceding clc_move */
+export const clc_moveseq = 6;
+
+/** SOS/WebRTC: [long] last client move sequence the server has applied */
+export const svc_moveack = 50;
 
 // Entity number mask: 10 bits for entity number (0-1023)
 export const PE_ENT_BITS = 10;

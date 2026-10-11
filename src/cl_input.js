@@ -2,11 +2,11 @@
 
 import { PITCH, YAW, ROLL } from './quakedef.js';
 import { Con_Printf, Q_atoi, SZ_Clear,
-	MSG_WriteByte, MSG_WriteFloat, MSG_WriteShort, MSG_WriteAngle,
+	MSG_WriteByte, MSG_WriteFloat, MSG_WriteShort, MSG_WriteAngle, MSG_WriteLong,
 	net_message } from './common.js';
 import { Cmd_AddCommand, Cmd_Argv } from './cmd.js';
 import { cvar_t, Cvar_RegisterVariable } from './cvar.js';
-import { clc_move, clc_delta, PE_UPDATE_BACKUP } from './protocol.js';
+import { clc_move, clc_delta, clc_moveseq, PE_UPDATE_BACKUP } from './protocol.js';
 import { SIGNONS,
 	kbutton_t, usercmd_t,
 	cl, cls, cl_entities } from './client.js';
@@ -15,7 +15,9 @@ import { host_frametime, realtime } from './host.js';
 import { V_StartPitchDrift, V_StopPitchDrift } from './view.js';
 import { lookspring, CL_Disconnect } from './cl_main.js';
 import { NET_SendUnreliableMessage } from './net_main.js';
-import { CL_StoreCommand, CL_GetValidSequence, CL_GetServerSequence } from './cl_pred.js';
+import {
+	CL_StoreCommand, CL_GetOutgoingSequence, CL_GetValidSequence, CL_GetServerSequence,
+} from './cl_pred.js';
 import { isXRActive, XR_GetAimAngles } from './webxr.js';
 
 // Pre-allocated array for XR aim angles (Golden Rule #4)
@@ -421,6 +423,11 @@ export function CL_SendMove( cmd ) {
 	_sendmove_predCmd.upmove = cmd.upmove;
 	_sendmove_predCmd.buttons = bits;
 	VectorCopy( cl.viewangles, _sendmove_predAngles );
+
+	// Tag this move with the prediction sequence the server will echo as svc_moveack.
+	const cmdSeq = CL_GetOutgoingSequence();
+	MSG_WriteByte( buf, clc_moveseq );
+	MSG_WriteLong( buf, cmdSeq );
 
 	if ( USE_QW_COMMAND_EXTENSIONS === true ) {
 

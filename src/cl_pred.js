@@ -142,6 +142,10 @@ export let cl_prediction_active = false; // true once CL_PredictMove has produce
 
 // Estimated latency for timing
 let cls_latency = 0;
+/** realtime when svc_moveack was last applied (skip time-based ack same datagram). */
+let moveAckRealtime = - 1;
+/** Visual residual so hard server corrections ease instead of snapping back. */
+const pred_error = new Float32Array( 3 );
 
 /*
 =================
@@ -172,6 +176,18 @@ CL_GetOutgoingSequence / CL_GetIncomingSequence
 */
 export function CL_GetOutgoingSequence() { return outgoing_sequence; }
 export function CL_GetIncomingSequence() { return incoming_sequence; }
+
+export function CL_MarkMoveAck() {
+
+	moveAckRealtime = realtime;
+
+}
+
+export function CL_HadRecentMoveAck() {
+
+	return moveAckRealtime >= 0 && ( realtime - moveAckRealtime ) < 0.05;
+
+}
 
 /*
 =================
@@ -324,12 +340,11 @@ export function CL_FindAcknowledgedSequence( currentTime ) {
 	if ( newestSent <= incoming_sequence )
 		return - 1;
 
-	// Require a minimum age before assuming the server has processed a command.
-	// Without this guard, high send rates can incorrectly "ack" the newest command
-	// every frame, collapsing prediction.
-	let minAckAge = cls_latency > 0 ? cls_latency : 0.1;
-	if ( minAckAge < 0.02 ) minAckAge = 0.02;
-	if ( minAckAge > 1.0 ) minAckAge = 1.0;
+	// Time-based fallback only (svc_moveack is preferred). Use ~half RTT — a full
+	// RTT under-acks and double-applies moves → forward then snap-back rubber-band.
+	let minAckAge = cls_latency > 0 ? cls_latency * 0.5 : 0.04;
+	if ( minAckAge < 0.016 ) minAckAge = 0.016;
+	if ( minAckAge > 0.25 ) minAckAge = 0.25;
 	const ackCutoffTime = currentTime - minAckAge;
 
 	let bestSeq = - 1;
@@ -925,6 +940,15 @@ export function CL_PredictMove() {
 
 	// Set predicted onground state (use the latest predicted frame)
 	cl_simonground = to.playerstate.onground ? 0 : -1;
+
+	// Ease residual correction from the last server baseline (reduces rubber-band pop).
+	for ( let i = 0; i < 3; i ++ ) {
+
+		cl_simorg[ i ] += pred_error[ i ];
+		pred_error[ i ] *= 0.7;
+
+	}
+
 	cl_prediction_active = true;
 }
 
@@ -938,6 +962,23 @@ Updates the acknowledged frame's player state
 */
 export function CL_SetServerState( origin, velocity, onground ) {
 	const frame = frames[ incoming_sequence & UPDATE_MASK ];
+
+	// Keep a decaying visual offset when the authoritative origin jumps behind
+	// the currently rendered prediction (classic rubber-band).
+	if ( cl_prediction_active ) {
+
+		for ( let i = 0; i < 3; i ++ ) {
+
+			const delta = cl_simorg[ i ] - origin[ i ];
+			if ( delta > 48 || delta < - 48 )
+				pred_error[ i ] = 0; // teleport / respawn — don't carry error
+			else
+				pred_error[ i ] = pred_error[ i ] * 0.35 + delta * 0.65;
+
+		}
+
+	}
+
 	VectorCopy( origin, frame.playerstate.origin );
 	VectorCopy( velocity, frame.playerstate.velocity );
 	frame.playerstate.onground = onground;
@@ -972,6 +1013,8 @@ export function CL_ResetPrediction() {
 	server_sequence = 0;
 	has_server_state = false;
 	cls_latency = 0;
+	moveAckRealtime = - 1;
+	pred_error.fill( 0 );
 
 	cl_simorg.fill( 0 );
 	cl_simvel.fill( 0 );

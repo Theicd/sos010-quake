@@ -32,7 +32,7 @@ import {
 	svc_playerinfo, PF_MSEC, PF_COMMAND, PF_VELOCITY1, PF_VELOCITY2, PF_VELOCITY3,
 	PF_MODEL, PF_SKINNUM, PF_EFFECTS, PF_WEAPONFRAME, PF_DEAD, PF_GIB,
 	CM_ANGLE1, CM_ANGLE2, CM_ANGLE3, CM_FORWARD, CM_SIDE, CM_UP, CM_BUTTONS, CM_IMPULSE,
-	svc_packetentities, svc_deltapacketentities, svc_serversequence,
+	svc_packetentities, svc_deltapacketentities, svc_serversequence, svc_moveack,
 	PE_ENT_BITS, PE_ENT_MASK, PE_ORIGIN1, PE_ORIGIN2, PE_ORIGIN3,
 	PE_ANGLE2, PE_REMOVE, PE_MOREBITS,
 	PE_FRAME, PE_ANGLE1, PE_ANGLE3, PE_MODEL, PE_COLORMAP, PE_SKIN, PE_EFFECTS, PE_SOLID,
@@ -1266,6 +1266,15 @@ function SV_SendClientDatagram( client ) {
 
 	MSG_WriteByte( _scdMsg, svc_time );
 	MSG_WriteFloat( _scdMsg, sv.time );
+
+	// Echo last applied client move sequence so remote clients reconcile prediction
+	// without guessing RTT (stops forward-then-snap-back rubber-banding on WebRTC).
+	if ( ( client.last_move_sequence | 0 ) >= 0 ) {
+
+		MSG_WriteByte( _scdMsg, svc_moveack );
+		MSG_WriteLong( _scdMsg, client.last_move_sequence | 0 );
+
+	}
 
 	// Write server sequence number for delta compression
 	MSG_WriteByte( _scdMsg, svc_serversequence );
