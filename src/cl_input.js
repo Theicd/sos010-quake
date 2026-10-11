@@ -421,8 +421,6 @@ export function CL_SendMove( cmd ) {
 	_sendmove_predCmd.upmove = cmd.upmove;
 	_sendmove_predCmd.buttons = bits;
 	VectorCopy( cl.viewangles, _sendmove_predAngles );
-	const netSequence = cls.netcon != null ? ( cls.netcon.sendSequence | 0 ) : - 1;
-	CL_StoreCommand( _sendmove_predCmd, realtime, netSequence );
 
 	if ( USE_QW_COMMAND_EXTENSIONS === true ) {
 
@@ -453,10 +451,20 @@ export function CL_SendMove( cmd ) {
 	if ( ++ cl.movemessages <= 2 )
 		return;
 
-	if ( NET_SendUnreliableMessage( cls.netcon, buf ) === - 1 ) {
+	const sendResult = NET_SendUnreliableMessage( cls.netcon, buf );
+	if ( sendResult === - 1 ) {
 
 		Con_Printf( 'CL_SendMove: lost server connection\n' );
 		CL_Disconnect();
+		return;
+
+	}
+
+	// Only predict commands that actually left the socket (return 0 = back-pressured).
+	if ( sendResult === 1 ) {
+
+		const netSequence = cls.netcon != null ? ( ( cls.netcon.sendSequence | 0 ) - 1 ) : - 1;
+		CL_StoreCommand( _sendmove_predCmd, realtime, netSequence );
 
 	}
 

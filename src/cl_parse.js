@@ -1052,12 +1052,16 @@ export function CL_ParseClientdata( bits ) {
 	//
 	if ( cl.viewentity >= 1 && cl.viewentity < cl_entities.length ) {
 
-		// QuakeWorld-style reconciliation baseline:
-		// use the latest transport-level ack from server.
+		// QuakeWorld-style reconciliation baseline.
+		// WebTransport: sequenced headers update receiveSequence/ackSequence.
+		// WebRTC: receiveSequence stays -1 (no headers). A default ackSequence of 0
+		// would match every command's netsequence and collapse prediction → stutter
+		// on remote clients (host skips prediction via sv.active).
 		if ( cls.netcon != null ) {
 
 			const ackSeq = cls.netcon.ackSequence | 0;
-			if ( ackSeq >= 0 ) {
+			const wireSequenced = ( cls.netcon.receiveSequence | 0 ) >= 0;
+			if ( wireSequenced && ackSeq >= 0 ) {
 
 				CL_AcknowledgeTransportSequence( ackSeq );
 
@@ -1071,8 +1075,7 @@ export function CL_ParseClientdata( bits ) {
 
 		}
 
-		// Then set the server state on the newly acknowledged frame
-		// This provides the base position/velocity for prediction replay
+		// Baseline from entity origin; svc_playerinfo for self refreshes it later.
 		const ent = cl_entities[ cl.viewentity ];
 		CL_SetServerState( ent.msg_origins[ 0 ], cl.mvelocity[ 0 ], cl.onground );
 

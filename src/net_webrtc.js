@@ -138,6 +138,13 @@ function bindSocket( link, address ) {
 	sock.driver = net_driverlevel;
 	sock.driverdata = link;
 	sock.lastMessageTime = performance.now() / 1000;
+	// WebRTC has no sequenced packet headers (unlike WebTransport).
+	// Keep ackSequence at -1 so prediction uses time-based RTT ack instead of
+	// treating the default 0 as "server acked everything" (collapses prediction → stutter).
+	sock.ackSequence = - 1;
+	sock.sendSequence = 0;
+	sock.receiveSequence = - 1;
+	sock.unreliableReceiveSequence = - 1;
 	connections.set( sock, link );
 	Con_DPrintf(
 		'RTC qsocket bound (%s) ctl=%s st=%s queued=%d\n',
@@ -457,7 +464,14 @@ export function RTC_QSendMessage( sock, data ) {
 	}
 
 	const r = sendOn( link.channel, data.data, data.cursize );
-	if ( r === 1 ) link.connected = true;
+	if ( r === 1 ) {
+
+		link.connected = true;
+		// Local counters only (no wire header) — used by prediction StoreCommand.
+		sock.sendSequence = ( ( sock.sendSequence | 0 ) + 1 ) | 0;
+
+	}
+
 	if ( r === - 1 ) {
 
 		link.connected = false;
@@ -476,13 +490,16 @@ export function RTC_SendUnreliableMessage( sock, data ) {
 
 	// Prefer Kart-style unreliable channel; fall back to ctl if st is not up yet.
 	const ch = ( link.st && link.st.readyState === 'open' ) ? link.st : link.channel;
-	const r = sendOn( ch, data.data, data.cursize );
+	let r = sendOn( ch, data.data, data.cursize );
 	if ( r === - 1 && ch === link.st ) {
 
 		// st failed — try ctl once
-		return sendOn( link.channel, data.data, data.cursize );
+		r = sendOn( link.channel, data.data, data.cursize );
 
 	}
+
+	if ( r === 1 )
+		sock.sendSequence = ( ( sock.sendSequence | 0 ) + 1 ) | 0;
 
 	return r;
 
