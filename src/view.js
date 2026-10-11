@@ -22,7 +22,10 @@ import { R_PushDlights } from './gl_rlight.js';
 import { con_forcedup } from './console.js';
 import { VID_UpdateGamma } from './vid.js';
 import { scr_viewsize } from './gl_screen.js';
-import { cl_simorg, cl_simvel, cl_simangles, cl_simonground, cl_nopred, cl_prediction_active } from './cl_pred.js';
+import {
+	cl_simorg, cl_simvel, cl_simangles, cl_simonground, cl_nopred, cl_prediction_active,
+	CL_SmoothRemotePlayerOrg, CL_ResetRemoteSmooth,
+} from './cl_pred.js';
 import { v_blend } from './glquake.js';
 
 export { v_blend };
@@ -802,10 +805,24 @@ export function V_CalcRefdef() {
 	// view is the weapon model (only visible from inside body)
 	const view = cl.viewent;
 
-	// Use predicted position for local player when running remotely (QuakeWorld-style prediction)
-	// Use server-interpolated position when running locally, during demos, or if prediction is disabled
+	// QW prediction fights NQ listen-server physics over WebRTC → forward/back snaps.
+	// SOS coop clients use cl_nopred + smoothed server follow instead.
 	const usePrediction = ( sv.active === false ) && ( cls.demoplayback === false ) && ( cl_nopred.value === 0 ) && cl_prediction_active;
-	const playerorg = usePrediction ? cl_simorg : ent.origin;
+	let playerorg;
+	if ( usePrediction ) {
+
+		playerorg = cl_simorg;
+
+	} else if ( sv.active === false && cls.demoplayback === false ) {
+
+		playerorg = CL_SmoothRemotePlayerOrg( ent.origin, host_frametime );
+
+	} else {
+
+		playerorg = ent.origin;
+		CL_ResetRemoteSmooth();
+
+	}
 
 	// transform the view offset by the model's matrix to get the offset from
 	// model origin for the view

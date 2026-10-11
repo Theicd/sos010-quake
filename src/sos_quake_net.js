@@ -1,8 +1,7 @@
 /**
  * SOS Quake quick-play — same shape as Kart Royale SosNet:
  * Nostr discovery + NIP-44 signalling + WebRTC data channel.
- * One Play tap: join an open hall (max 4) or host.
- * Modes: Deathmatch (FFA) or Team (coop vs monsters).
+ * One Play tap: Team coop (players vs monsters), up to 4 over P2P.
  * Late joiners spawn next to whoever is already on the map.
  */
 
@@ -27,12 +26,13 @@ import { cls } from './client.js';
 import { SV_LinkEdict } from './world.js';
 import { VectorCopy } from './mathlib.js';
 import { COM_EnsureFile } from './pak.js';
+import { CL_ResetRemoteSmooth } from './cl_pred.js';
 
-export const ROOM_TAG = 'sos_quake_v2';
+export const ROOM_TAG = 'sos_quake_v3';
 const KIND_ROOM = 33214;
 const KIND_SIGNAL = 25214;
 const UPSTREAM_GITHUB = 'https://github.com/mrdoob/three-quake';
-const MODE_DM = 'dm';
+/** Team / coop only — FFA prediction rubber-bands on WebRTC listen servers. */
 const MODE_TEAM = 'team';
 const RELAYS = [
 	'wss://relay.damus.io',
@@ -64,16 +64,13 @@ const ANNOUNCE_GAP_MS = 1_500;
 const LISTEN_MS = 3_500;
 const JOIN_TIMEOUT_MS = 14_000;
 const ICE_WAIT_MS = 4_000;
-const DEFAULT_MAP = 'rapture1';
-/** Community deathmatch maps shipped under /maps. */
-const DM_MAPS = [ 'rapture1', 'spinev2', 'naked5', 'zed', 'efdm9', 'baldm6', 'edc', 'ultrav' ];
+const DEFAULT_MAP = 'start';
 /** Shareware episode maps for Team / coop. */
 const TEAM_MAPS = [ 'start', 'e1m1', 'e1m2', 'e1m3', 'e1m4', 'e1m5', 'e1m6', 'e1m7', 'e1m8' ];
 /** Extra wait (0–2.5s) so two Play presses don't both become host. */
 const HOST_STAGGER_MAX_MS = 2_500;
-const BUS_NAME = 'sos_quake_v2_bus';
-const LS_ROOM_KEY = 'sos_quake_v2_rooms';
-const LS_MODE_KEY = 'sos.quake.mode';
+const BUS_NAME = 'sos_quake_v3_bus';
+const LS_ROOM_KEY = 'sos_quake_v3_rooms';
 
 const now = () => Date.now();
 const nowSec = () => Math.floor( now() / 1000 );
@@ -131,28 +128,11 @@ function mapFromQuery() {
 
 }
 
-function pickRandomMap( mode ) {
+function pickRandomMap() {
 
 	const forced = mapFromQuery();
 	if ( forced ) return forced;
-	const pool = mode === MODE_TEAM ? TEAM_MAPS : DM_MAPS;
-	return pool[ Math.floor( Math.random() * pool.length ) ] || DEFAULT_MAP;
-
-}
-
-function readMode() {
-
-	try {
-
-		const q = new URLSearchParams( location.search ).get( 'mode' );
-		if ( q === 'team' || q === 'coop' ) return MODE_TEAM;
-		if ( q === 'dm' || q === 'deathmatch' ) return MODE_DM;
-		const stored = localStorage.getItem( LS_MODE_KEY );
-		if ( stored === MODE_TEAM || stored === MODE_DM ) return stored;
-
-	} catch { /* private mode */ }
-
-	return MODE_DM;
+	return TEAM_MAPS[ Math.floor( Math.random() * TEAM_MAPS.length ) ] || DEFAULT_MAP;
 
 }
 
@@ -318,8 +298,8 @@ class SosQuakeNet {
 		this.announceTimer = 0;
 		this.lastAnnounce = 0;
 		this.timers = [];
-		this.mode = readMode();
-		this.map = pickRandomMap( this.mode );
+		this.mode = MODE_TEAM;
+		this.map = pickRandomMap();
 		this.ui = null;
 		this.chrome = null;
 		this.lamp = null;
@@ -373,22 +353,17 @@ class SosQuakeNet {
 		root.innerHTML = `
 			<div class="panel">
 				<div class="brand">SOS · Three.js Quake</div>
-				<div class="modes" role="group" aria-label="Game mode">
-					<button type="button" class="mode" data-mode="${ MODE_DM }">Deathmatch</button>
-					<button type="button" class="mode" data-mode="${ MODE_TEAM }">Team</button>
-				</div>
-				<h1 id="sos-quake-title">Deathmatch</h1>
-				<p class="plot" id="sos-quake-plot"></p>
+				<h1>Team</h1>
+				<p class="plot">Tap Play — 2–4 players team up over P2P against the monsters. Join an open hall or host if empty. Hits on enemies are what count.</p>
 				<div class="status" id="sos-quake-status">Ready</div>
 				<div class="row">
 					<button type="button" class="btn" id="sos-quake-play">Play</button>
 				</div>
-				<p class="hint">No accounts. Same map session · max ${ MAX_HUMANS } players · GPL Quake / <a href="${ UPSTREAM_GITHUB }" target="_blank" rel="noopener noreferrer" style="color:#d6b262">mrdoob three-quake</a></p>
+				<p class="hint">No accounts. Coop session · max ${ MAX_HUMANS } · GPL Quake / <a href="${ UPSTREAM_GITHUB }" target="_blank" rel="noopener noreferrer" style="color:#d6b262">mrdoob three-quake</a></p>
 			</div>
 		`;
 		document.body.appendChild( root );
 		this.ui = root;
-		this.syncModeUi();
 
 		const lamp = document.createElement( 'div' );
 		lamp.id = 'sos-quake-lamp';
@@ -406,16 +381,6 @@ class SosQuakeNet {
 		} );
 
 		root.querySelector( '#sos-quake-play' ).addEventListener( 'click', () => this.play() );
-		for ( const btn of root.querySelectorAll( '.mode' ) ) {
-
-			btn.addEventListener( 'click', () => {
-
-				if ( this.playBusy || this.role === 'host' || this.role === 'client' ) return;
-				this.setMode( btn.getAttribute( 'data-mode' ) );
-
-			} );
-
-		}
 
 		chrome.querySelector( '#sos-quake-gear' ).addEventListener( 'click', ( e ) => {
 
@@ -435,44 +400,6 @@ class SosQuakeNet {
 		this.setupInstallPrompt();
 		M_ForceCloseMenu();
 		addEventListener( 'pagehide', () => this.leave() );
-
-	}
-
-	setMode( mode ) {
-
-		const next = mode === MODE_TEAM ? MODE_TEAM : MODE_DM;
-		this.mode = next;
-		this.map = pickRandomMap( next );
-		try {
-
-			localStorage.setItem( LS_MODE_KEY, next );
-
-		} catch { /* ignore */ }
-
-		this.syncModeUi();
-
-	}
-
-	syncModeUi() {
-
-		if ( ! this.ui ) return;
-		const team = this.mode === MODE_TEAM;
-		for ( const btn of this.ui.querySelectorAll( '.mode' ) ) {
-
-			btn.classList.toggle( 'on', btn.getAttribute( 'data-mode' ) === this.mode );
-
-		}
-
-		const title = this.ui.querySelector( '#sos-quake-title' );
-		const plot = this.ui.querySelector( '#sos-quake-plot' );
-		if ( title ) title.textContent = team ? 'Team' : 'Deathmatch';
-		if ( plot ) {
-
-			plot.textContent = team
-				? 'Tap Play — 2–4 players team up over P2P against the monsters (not each other). Join an open hall or host if empty.'
-				: 'Tap Play — join up to 4 players over P2P in free-for-all, or host if the hall is empty. New arrivals drop in next to you.';
-
-		}
 
 	}
 
@@ -743,18 +670,19 @@ class SosQuakeNet {
 
 	soloFallback() {
 
-		this.map = pickRandomMap( this.mode );
+		this.map = pickRandomMap();
 		this.hideUi();
 		M_ForceCloseMenu();
+		CL_ResetRemoteSmooth();
 		set_key_dest( key_game );
 		SCR_BeginLoadingPlaque();
-		const team = this.mode === MODE_TEAM;
 		Cbuf_AddText(
 			`disconnect\n` +
+			`cl_nopred 1\n` +
 			`maxplayers 1\n` +
-			`deathmatch ${ team ? 0 : 1 }\n` +
-			`coop ${ team ? 1 : 0 }\n` +
-			`teamplay ${ team ? 1 : 0 }\n` +
+			`deathmatch 0\n` +
+			`coop 1\n` +
+			`teamplay 1\n` +
 			`map ${ this.map }\n`,
 		);
 
@@ -793,7 +721,7 @@ class SosQuakeNet {
 			pubkey,
 			players: Math.max( 1, Math.min( MAX_HUMANS, Number( c.players ) || 1 ) ),
 			map: typeof c.map === 'string' ? c.map : DEFAULT_MAP,
-			mode: c.mode === MODE_TEAM ? MODE_TEAM : MODE_DM,
+			mode: MODE_TEAM,
 			ts,
 		} );
 		this._persistLocalRooms();
@@ -858,7 +786,7 @@ class SosQuakeNet {
 
 					this.candidates.set( data.pubkey, {
 						ts: Number( data.ts ) || nowSec(),
-						mode: data.mode === MODE_TEAM ? MODE_TEAM : MODE_DM,
+						mode: MODE_TEAM,
 					} );
 					// Answer so late arrivers see us during the gather window.
 					if ( this.role === 'searching' || this.role === 'host' ) {
@@ -1030,7 +958,7 @@ class SosQuakeNet {
 				r.ts >= cut
 				&& r.players < MAX_HUMANS
 				&& r.pubkey !== this.pk
-				&& ( r.mode || MODE_DM ) === this.mode,
+				&& ( r.mode || MODE_TEAM ) === this.mode,
 			)
 			.sort( ( a, b ) => b.players - a.players || b.ts - a.ts );
 
@@ -1046,7 +974,7 @@ class SosQuakeNet {
 
 			if ( this.disposed || this.role !== 'searching' ) return;
 			this.setStatus( `Joining room (${ room.players }/${ MAX_HUMANS })…` );
-			if ( room.mode ) this.mode = room.mode;
+			this.mode = MODE_TEAM;
 			if ( await this.tryJoin( room.pubkey, room.map ) ) return;
 
 		}
@@ -1057,7 +985,7 @@ class SosQuakeNet {
 			.filter( ( [ , info ] ) => {
 
 				const ts = typeof info === 'number' ? info : info?.ts;
-				const mode = typeof info === 'number' ? MODE_DM : ( info?.mode || MODE_DM );
+				const mode = typeof info === 'number' ? MODE_TEAM : ( info?.mode || MODE_TEAM );
 				return ts >= cut && mode === this.mode;
 
 			} )
@@ -1096,13 +1024,14 @@ class SosQuakeNet {
 
 		this.role = 'host';
 		this.hostSince = now();
-		const team = this.mode === MODE_TEAM;
-		this.map = pickRandomMap( this.mode );
-		this.setStatus( team ? `Hosting team · ${ this.map }…` : `Hosting · ${ this.map }…` );
+		this.mode = MODE_TEAM;
+		this.map = pickRandomMap();
+		this.setStatus( `Hosting team · ${ this.map }…` );
 		// Publish the hall immediately so a simultaneous Play can still join.
 		this.announce();
 		this.hideUi();
 		M_ForceCloseMenu();
+		CL_ResetRemoteSmooth();
 		set_key_dest( key_game );
 		SCR_BeginLoadingPlaque();
 		// Prefetch BSP so late joiners (and host) don't hit the async reconnect path blind.
@@ -1110,11 +1039,13 @@ class SosQuakeNet {
 		Cbuf_AddText(
 			`name "${ readName() }"\n` +
 			`disconnect\n` +
+			`cl_nopred 1\n` +
 			`maxplayers ${ MAX_HUMANS }\n` +
 			`listen 1\n` +
-			`deathmatch ${ team ? 0 : 1 }\n` +
-			`coop ${ team ? 1 : 0 }\n` +
-			`teamplay ${ team ? 1 : 0 }\n` +
+			`deathmatch 0\n` +
+			`coop 1\n` +
+			`teamplay 1\n` +
+			`skill 1\n` +
 			`map ${ this.map }\n`,
 		);
 		clearInterval( this.heartbeat );
@@ -1126,7 +1057,7 @@ class SosQuakeNet {
 
 		}, HEARTBEAT_MS );
 		this.playBusy = false;
-		Con_Printf( 'SOS Quake: hosting %s P2P room on %s\n', team ? 'team' : 'deathmatch', this.map );
+		Con_Printf( 'SOS Quake: hosting team P2P room on %s\n', this.map );
 
 	}
 
@@ -1216,9 +1147,11 @@ class SosQuakeNet {
 				set_key_dest( key_game );
 				SCR_BeginLoadingPlaque();
 				const mapName = this.map;
+				CL_ResetRemoteSmooth();
 				void COM_EnsureFile( 'maps/' + mapName + '.bsp' ).finally( () => {
 
-					Cbuf_AddText( `name "${ readName() }"\nconnect webrtc\n` );
+					// No QW prediction on remote clients — NQ server physics + smooth follow.
+					Cbuf_AddText( `name "${ readName() }"\ncl_nopred 1\nconnect webrtc\n` );
 
 				} );
 				this.setLamp( 2, 'on' );

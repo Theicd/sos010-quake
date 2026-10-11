@@ -13,7 +13,8 @@ import { STAT_HEALTH } from './quakedef.js';
 import { realtime, sv } from './host.js';
 
 // CVars
-export const cl_nopred = new cvar_t( 'cl_nopred', '0' );
+// Default on for SOS: remote WebRTC clients must not QW-predict against NQ physics.
+export const cl_nopred = new cvar_t( 'cl_nopred', '1' );
 export const cl_pushlatency = new cvar_t( 'pushlatency', '-999' );
 export const cl_solid_players = new cvar_t( 'cl_solid_players', '1' );
 export const cl_predict_players = new cvar_t( 'cl_predict_players', '1' );
@@ -146,6 +147,50 @@ let cls_latency = 0;
 let moveAckRealtime = - 1;
 /** Visual residual so hard server corrections ease instead of snapping back. */
 const pred_error = new Float32Array( 3 );
+/** Remote client: lerp view toward server origin (no QW predict vs NQ physics). */
+const remote_smooth_org = new Float32Array( 3 );
+let remote_smooth_valid = false;
+
+export function CL_ResetRemoteSmooth() {
+
+	remote_smooth_valid = false;
+	remote_smooth_org.fill( 0 );
+
+}
+
+export function CL_SmoothRemotePlayerOrg( target, frametime ) {
+
+	if ( ! remote_smooth_valid ) {
+
+		VectorCopy( target, remote_smooth_org );
+		remote_smooth_valid = true;
+		return remote_smooth_org;
+
+	}
+
+	let maxDelta = 0;
+	for ( let i = 0; i < 3; i ++ ) {
+
+		const d = Math.abs( target[ i ] - remote_smooth_org[ i ] );
+		if ( d > maxDelta ) maxDelta = d;
+
+	}
+
+	if ( maxDelta > 96 ) {
+
+		VectorCopy( target, remote_smooth_org );
+		return remote_smooth_org;
+
+	}
+
+	const dt = frametime > 0 ? frametime : 0.016;
+	const a = 1 - Math.exp( - dt * 22 );
+	for ( let i = 0; i < 3; i ++ )
+		remote_smooth_org[ i ] += ( target[ i ] - remote_smooth_org[ i ] ) * a;
+
+	return remote_smooth_org;
+
+}
 
 /*
 =================
@@ -1021,6 +1066,7 @@ export function CL_ResetPrediction() {
 	cl_simangles.fill( 0 );
 	cl_simonground = -1;
 	cl_prediction_active = false;
+	CL_ResetRemoteSmooth();
 
 	for ( let i = 0; i < UPDATE_BACKUP; i++ ) {
 		frames[ i ].sequence = - 1;

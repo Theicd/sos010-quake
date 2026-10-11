@@ -7,10 +7,9 @@ Live: https://theicd.github.io/sos010-quake/
 ## Play
 
 1. Open the link.
-2. Choose **Deathmatch** (everyone vs everyone) or **Team** (players cooperate vs monsters).
-3. Tap **Play**.
-4. If someone is already in a room for that mode, you join their map session (spawn next to them).
-5. If not, you host a listen server and others can join.
+2. Tap **Play** (Team coop — players vs monsters, up to 4).
+3. If someone is already in a room, you join their map session (spawn next to them).
+4. If not, you host a listen server and others can join.
 
 No accounts. Matchmaking uses Nostr discovery + WebRTC data channels (same approach as SOS Kart / Chess).
 
@@ -26,9 +25,7 @@ Top bar:
 |-------|--------|
 | `?solo=1` | Skip matchmaking, start a local game |
 | `?auto=1` | Press Play automatically |
-| `?mode=team` | Start in Team (coop) mode |
-| `?mode=dm` | Start in Deathmatch mode |
-| `?map=rapture1` | Force a specific host map (otherwise each game picks a random map) |
+| `?map=e1m1` | Force a specific host map (otherwise each game picks a random episode map) |
 | `?net=0` | Disable online matchmaking |
 | `?relay=1` | Force TURN for WebRTC |
 
