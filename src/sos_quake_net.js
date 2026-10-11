@@ -30,6 +30,7 @@ import { CL_ResetRemoteSmooth } from './cl_pred.js';
 import { ED_Alloc, ED_Free, ED_NewString, ED_FindFunction } from './pr_edict.js';
 import { PR_ExecuteProgram } from './pr_exec.js';
 import { EDICT_NUM, EDICT_TO_PROG, PR_GetString, pr_functions, pr_global_struct } from './progs.js';
+import { SCR_CenterPrint } from './gl_screen.js';
 
 export const ROOM_TAG = 'sos_quake_v3';
 const KIND_ROOM = 33214;
@@ -68,14 +69,28 @@ const LISTEN_MS = 3_500;
 const JOIN_TIMEOUT_MS = 14_000;
 const ICE_WAIT_MS = 4_000;
 const DEFAULT_MAP = 'start';
-/** Shareware episode maps for Team / coop. */
+/**
+ * Team/coop Play maps = shareware episode BSPs (same files Quake uses for
+ * single-player / deathmatch). Rules differ (coop vs DM), maps do not.
+ */
 const TEAM_MAPS = [ 'start', 'e1m1', 'e1m2', 'e1m3', 'e1m4', 'e1m5', 'e1m6', 'e1m7', 'e1m8' ];
+const MAP_LABELS = {
+	start: 'Introduction',
+	e1m1: 'Slipgate Complex',
+	e1m2: 'Castle of the Damned',
+	e1m3: 'The Necropolis',
+	e1m4: 'The Grisly Grotto',
+	e1m5: 'Gloom Keep',
+	e1m6: 'The Door to Chthon',
+	e1m7: 'The House of Chthon',
+	e1m8: 'Ziggurat Vertigo',
+};
 /** Extra wait (0–2.5s) so two Play presses don't both become host. */
 const HOST_STAGGER_MAX_MS = 2_500;
 const BUS_NAME = 'sos_quake_v3_bus';
 const LS_ROOM_KEY = 'sos_quake_v3_rooms';
 
-/** Weapons / armor / ammo scattered across the map at load (not stacked). */
+/** Weapons / armor / ammo scattered across EVERY Team map at load (not stacked). */
 const STARTER_LOOT = [
 	'weapon_supershotgun',
 	'weapon_nailgun',
@@ -157,12 +172,20 @@ function pickRandomMap() {
 
 }
 
+function mapLabel( id ) {
+
+	const key = String( id || '' ).toLowerCase();
+	return MAP_LABELS[ key ] || key || '?';
+
+}
+
 function collectLootAnchors() {
 
 	const starts = [];
+	const floors = []; // existing items/weapons = proven solid ground (survived droptofloor)
 	const others = [];
 	// Called during SV_SpawnServer before sv.active — use edict count only.
-	if ( ! sv?.num_edicts ) return { starts, others, all: [] };
+	if ( ! sv?.num_edicts ) return { starts, floors, others, all: [] };
 	for ( let i = 1; i < sv.num_edicts; i ++ ) {
 
 		const ed = EDICT_NUM( i );
@@ -176,11 +199,12 @@ function collectLootAnchors() {
 		if ( ! Number.isFinite( x + y + z ) ) continue;
 		const pos = [ x, y, z ];
 		if ( /^info_player/.test( cn ) ) starts.push( pos );
-		else if ( /^(weapon_|item_|monster_|path_corner)/.test( cn ) ) others.push( pos );
+		else if ( /^(weapon_|item_)/.test( cn ) ) floors.push( pos );
+		else if ( /^(monster_|path_corner)/.test( cn ) ) others.push( pos );
 
 	}
 
-	return { starts, others, all: starts.concat( others ) };
+	return { starts, floors, others, all: starts.concat( floors, others ) };
 
 }
 
@@ -217,13 +241,14 @@ function spawnLootEntity( classname, origin ) {
 }
 
 /**
- * Drop weapons / armor around the map so the opening minutes feel hotter.
+ * Drop weapons / armor on EVERY Team map near proven floor / spawn points.
+ * Far random offsets often miss solids → QuakeC droptofloor removes the item.
  * Must run during SV_SpawnServer (ss_loading). Host entities replicate to joiners.
  */
 function scatterStarterLoot( mapName ) {
 
 	if ( ! sv?.num_edicts || ! pr_global_struct ) return 0;
-	const { starts, all } = collectLootAnchors();
+	const { starts, floors, others, all } = collectLootAnchors();
 	if ( all.length < 1 ) return 0;
 
 	const bag = STARTER_LOOT.slice();
@@ -236,9 +261,10 @@ function scatterStarterLoot( mapName ) {
 
 	}
 
-	// Early maps bias pickups toward player starts for immediate action.
-	const nearStartBias = ( mapName === 'start' || mapName === 'e1m1' ) ? 0.75 : 0.45;
-	const minDist = 64;
+	// Tight rings around starts + existing pickups (solid ground). All TEAM_MAPS.
+	const nearStart = starts.length ? starts : all;
+	const midMap = floors.length ? floors : ( others.length ? others : all );
+	const minDist = 40;
 	const used = [];
 	let placed = 0;
 
@@ -246,17 +272,18 @@ function scatterStarterLoot( mapName ) {
 
 		const classname = bag[ n ];
 		let best = null;
-		for ( let tries = 0; tries < 18; tries ++ ) {
+		for ( let tries = 0; tries < 24; tries ++ ) {
 
-			const preferStarts = n < bag.length * nearStartBias && starts.length > 0;
-			const pool = preferStarts ? starts : all;
-			const base = pool[ Math.floor( Math.random() * pool.length ) ];
-			const ang = n * 2.3999632 + tries * 0.7 + Math.random() * 0.35;
-			const dist = 80 + ( n % 6 ) * 52 + Math.random() * 72;
+			// First ~half near player starts (visible early); rest across map floors.
+			const pool = ( n < Math.ceil( bag.length * 0.55 ) ) ? nearStart : midMap;
+			const base = pool[ ( n + tries ) % pool.length ];
+			const ang = n * 2.3999632 + tries * 0.9;
+			// Keep close so droptofloor still hits solid brush.
+			const dist = 28 + ( tries % 5 ) * 18 + ( n % 3 ) * 8;
 			const pos = [
 				base[ 0 ] + Math.cos( ang ) * dist,
 				base[ 1 ] + Math.sin( ang ) * dist,
-				base[ 2 ] + 18,
+				base[ 2 ] + 12,
 			];
 			let ok = true;
 			for ( let u = 0; u < used.length; u ++ ) {
@@ -290,6 +317,8 @@ function scatterStarterLoot( mapName ) {
 
 	if ( placed > 0 )
 		Con_Printf( 'SOS Quake: scattered %d starter pickups on %s\n', placed, mapName || sv.name || '?' );
+	else
+		Con_Printf( 'SOS Quake: no starter pickups placed on %s (anchors=%d)\n', mapName || '?', all.length );
 	return placed;
 
 }
@@ -513,7 +542,7 @@ class SosQuakeNet {
 			<div class="panel">
 				<div class="brand">SOS · Three.js Quake</div>
 				<h1>Team</h1>
-				<p class="plot">Tap Play — 2–4 players team up over P2P against the monsters. Join an open hall or host if empty. Weapons and armor scatter across the map at the start — hunt them down.</p>
+				<p class="plot">Tap Play — 2–4 players team up over P2P against the monsters. Each game picks a random episode map (start, e1m1–e1m8). Extra weapons, armor &amp; ammo scatter near spawns on every map.</p>
 				<div class="status" id="sos-quake-status">Ready</div>
 				<div class="row">
 					<button type="button" class="btn" id="sos-quake-play">Play</button>
@@ -1698,6 +1727,18 @@ export function Sos_OnClientSpawned( client ) {
 		if ( c === client ) continue;
 		others ++;
 		if ( ! anchor ) anchor = c;
+
+	}
+
+	// First human in: show which episode map this is (loot is on all of them).
+	if ( others < 1 ) {
+
+		const id = sv?.name || net?.map || '?';
+		try {
+
+			SCR_CenterPrint( `TEAM · ${ id }\n${ mapLabel( id ) }\nWeapons & armor near spawns` );
+
+		} catch { /* ignore */ }
 
 	}
 
