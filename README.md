@@ -9,7 +9,7 @@ Live: https://theicd.github.io/sos010-quake/
 1. Open the link.
 2. Tap **Play** (Team coop — players vs monsters, up to 4).
 3. If someone is already in a room, you join their map session (spawn next to them).
-4. If not, you host a listen server on a random episode map; cool weapons & armor scatter at start.
+4. If not, you host a listen server on a random episode map.
 
 No accounts. Matchmaking uses Nostr discovery + WebRTC data channels (same approach as SOS Kart / Chess).
 
