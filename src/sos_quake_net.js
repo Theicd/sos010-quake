@@ -11,7 +11,8 @@ import * as nip44 from 'nostr-tools/nip44';
 
 import { Cbuf_AddText } from './cmd.js';
 import { Con_Printf } from './common.js';
-import { SCR_BeginLoadingPlaque } from './gl_screen.js';
+import { Con_SetForcedup } from './console.js';
+import { SCR_BeginLoadingPlaque, SCR_EndLoadingPlaque } from './gl_screen.js';
 import { set_key_dest, key_game } from './keys.js';
 import { M_ForceCloseMenu } from './menu.js';
 import {
@@ -498,6 +499,8 @@ class SosQuakeNet {
 		this.joining = false;
 		this.deferredInstall = null;
 		this.lootScatteredFor = null;
+		this._hostRecovering = false;
+		this._hostLostTimer = 0;
 		this._ingestRoom = this._ingestRoom.bind( this );
 
 	}
@@ -1208,17 +1211,24 @@ class SosQuakeNet {
 
 	}
 
-	becomeHost() {
+	becomeHost( opts = {} ) {
 
 		this.role = 'host';
 		this.hostSince = now();
 		this.mode = MODE_TEAM;
-		this.map = pickRandomMap();
+		if ( ! opts.keepMap || ! this.map ) this.map = pickRandomMap();
 		this.setStatus( `Hosting team · ${ this.map }…` );
 		// Publish the hall immediately so a simultaneous Play can still join.
 		this.announce();
 		this.hideUi();
 		M_ForceCloseMenu();
+		try {
+
+			Con_SetForcedup( false );
+			SCR_EndLoadingPlaque();
+
+		} catch { /* ignore */ }
+
 		CL_ResetRemoteSmooth();
 		set_key_dest( key_game );
 		SCR_BeginLoadingPlaque();
@@ -1245,7 +1255,62 @@ class SosQuakeNet {
 
 		}, HEARTBEAT_MS );
 		this.playBusy = false;
+		const btn = document.getElementById( 'sos-quake-play' );
+		if ( btn ) btn.disabled = false;
 		Con_Printf( 'SOS Quake: hosting team P2P room on %s\n', this.map );
+
+	}
+
+	/**
+	 * Client lost the listen-server host. Quake cannot migrate live sim state,
+	 * so we tear down cleanly and promote this peer to host on the same map —
+	 * they keep playing and re-announce the room for players 3/4.
+	 */
+	scheduleHostLost( reason ) {
+
+		if ( this.disposed || this.role !== 'client' || this._hostRecovering ) return;
+		clearTimeout( this._hostLostTimer );
+		this._hostLostTimer = window.setTimeout( () => this.onHostLost( reason ), 450 );
+
+	}
+
+	onHostLost( reason ) {
+
+		if ( this.disposed || this.role !== 'client' || this._hostRecovering ) return;
+		this._hostRecovering = true;
+		clearTimeout( this._hostLostTimer );
+		const keepMap = this.map || DEFAULT_MAP;
+		Con_Printf( 'SOS Quake: host left (%s) — taking over room on %s\n', reason || '?', keepMap );
+		this.setStatus( 'Host left — you are the new room…' );
+		this.setLamp( 1, 'search' );
+
+		RTC_ClearPendingClient();
+		for ( const pk of [ ...this.peers.keys() ] ) this.dropPeer( pk );
+		clearInterval( this.heartbeat );
+		this.joining = false;
+		this.playBusy = false;
+		this.role = 'idle';
+		this.map = keepMap;
+
+		try {
+
+			Con_SetForcedup( false );
+			SCR_EndLoadingPlaque();
+
+		} catch { /* ignore */ }
+
+		M_ForceCloseMenu();
+		set_key_dest( key_game );
+		Cbuf_AddText( 'disconnect\n' );
+
+		window.setTimeout( () => {
+
+			if ( this.disposed ) return;
+			this._hostRecovering = false;
+			this.map = keepMap;
+			this.becomeHost( { keepMap: true } );
+
+		}, 500 );
 
 	}
 
@@ -1374,7 +1439,19 @@ class SosQuakeNet {
 
 			ctl.addEventListener( 'close', () => {
 
-				if ( this.role === 'client' ) this.setStatus( 'Host disconnected' );
+				this.scheduleHostLost( 'ctl-close' );
+
+			} );
+			st.addEventListener( 'close', () => {
+
+				this.scheduleHostLost( 'st-close' );
+
+			} );
+			pc.addEventListener( 'connectionstatechange', () => {
+
+				const s = pc.connectionState;
+				if ( s === 'failed' || s === 'closed' || s === 'disconnected' )
+					this.scheduleHostLost( 'pc-' + s );
 
 			} );
 
@@ -1587,6 +1664,8 @@ class SosQuakeNet {
 		for ( const pk of [ ...this.peers.keys() ] ) this.dropPeer( pk );
 		clearInterval( this.heartbeat );
 		clearTimeout( this.announceTimer );
+		clearTimeout( this._hostLostTimer );
+		this._hostRecovering = false;
 
 	}
 
@@ -1703,9 +1782,19 @@ export function Sos_OnMapEntitiesLoaded( mapName ) {
 
 }
 
+/**
+ * Called from CL_SendMove when the WebRTC host socket dies mid-game.
+ */
+export function Sos_OnLostServerConnection() {
+
+	if ( net && net.role === 'client' ) net.scheduleHostLost( 'sendmove' );
+
+}
+
 try {
 
 	globalThis.__sosOnMapEntitiesLoaded = Sos_OnMapEntitiesLoaded;
+	globalThis.__sosOnLostServerConnection = Sos_OnLostServerConnection;
 
 } catch { /* non-browser */ }
 

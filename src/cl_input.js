@@ -463,6 +463,13 @@ export function CL_SendMove( cmd ) {
 
 		Con_Printf( 'CL_SendMove: lost server connection\n' );
 		CL_Disconnect();
+		try {
+
+			if ( typeof globalThis.__sosOnLostServerConnection === 'function' )
+				globalThis.__sosOnLostServerConnection();
+
+		} catch { /* SOS hook optional */ }
+
 		return;
 
 	}
