@@ -685,50 +685,88 @@ function Touch_ReleaseWakeLock() {
 =================
 Touch_RequestFullscreen
 
-Request fullscreen and lock to landscape orientation on mobile
+Request fullscreen and lock to landscape. Must be called from a user gesture
+(e.g. Play tap) — browsers reject orientation.lock otherwise.
 =================
 */
 export async function Touch_RequestFullscreen() {
 
-	if ( fullscreenActivated ) return;
-
 	try {
 
-		// Request fullscreen
 		const container = document.documentElement;
-		if ( container.requestFullscreen ) {
+		const alreadyFs = !!( document.fullscreenElement || document.webkitFullscreenElement );
+		if ( ! alreadyFs ) {
 
-			await container.requestFullscreen();
+			if ( container.requestFullscreen ) {
 
-		} else if ( container.webkitRequestFullscreen ) {
+				await container.requestFullscreen( { navigationUI: 'hide' } );
 
-			await container.webkitRequestFullscreen();
+			} else if ( container.webkitRequestFullscreen ) {
 
-		}
-
-		// Lock to landscape orientation
-		if ( screen.orientation && screen.orientation.lock ) {
-
-			try {
-
-				await screen.orientation.lock( 'landscape' );
-
-			} catch ( e ) {
-
-				// Orientation lock may not be supported or allowed
-				console.log( 'Could not lock orientation:', e.message );
+				await container.webkitRequestFullscreen();
 
 			}
 
 		}
 
-		fullscreenActivated = true;
+		if ( screen.orientation && typeof screen.orientation.lock === 'function' ) {
+
+			try {
+
+				await screen.orientation.lock( 'landscape' );
+
+			} catch {
+
+				try {
+
+					await screen.orientation.lock( 'landscape-primary' );
+
+				} catch ( e ) {
+
+					console.log( 'Could not lock orientation:', e?.message || e );
+
+				}
+
+			}
+
+		}
+
+		fullscreenActivated = !!( document.fullscreenElement || document.webkitFullscreenElement );
 
 	} catch ( e ) {
 
 		console.log( 'Could not enter fullscreen:', e.message );
+		fullscreenActivated = false;
 
 	}
+
+}
+
+/**
+ * Call from the Play button click stack so fullscreen + landscape start
+ * immediately (not on a later random screen tap).
+ */
+export function Touch_EnterPlayMode() {
+
+	if ( ! Touch_IsMobile() ) return;
+	if ( ! initialized ) Touch_Init( document.body );
+	void Touch_RequestFullscreen();
+	try {
+
+		Touch_Enable();
+
+	} catch { /* not ready yet */ }
+
+	// Keep trying lock briefly — some WebViews finish FS after a tick.
+	let tries = 0;
+	const retry = window.setInterval( () => {
+
+		tries ++;
+		void Touch_RequestFullscreen();
+		const landscape = window.matchMedia?.( '(orientation: landscape)' )?.matches;
+		if ( landscape || tries >= 8 ) clearInterval( retry );
+
+	}, 250 );
 
 }
 

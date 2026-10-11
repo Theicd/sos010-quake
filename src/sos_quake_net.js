@@ -32,6 +32,7 @@ import { ED_Alloc, ED_Free, ED_NewString, ED_FindFunction } from './pr_edict.js'
 import { PR_ExecuteProgram } from './pr_exec.js';
 import { EDICT_NUM, EDICT_TO_PROG, PR_GetString, pr_functions, pr_global_struct } from './progs.js';
 import { SCR_CenterPrint } from './gl_screen.js';
+import { Touch_EnterPlayMode, Touch_IsMobile } from './touch.js';
 
 export const ROOM_TAG = 'sos_quake_v3';
 const KIND_ROOM = 33214;
@@ -836,6 +837,8 @@ class SosQuakeNet {
 
 		if ( this.playBusy || this.role === 'host' || this.role === 'client' ) return;
 		M_ForceCloseMenu();
+		// Same tap as Play = user gesture for fullscreen + landscape lock.
+		if ( Touch_IsMobile() ) Touch_EnterPlayMode();
 		if ( ! SosQuakeNet.supported() ) {
 
 			this.soloFallback();
@@ -861,6 +864,7 @@ class SosQuakeNet {
 
 	soloFallback() {
 
+		if ( Touch_IsMobile() ) Touch_EnterPlayMode();
 		this.map = pickRandomMap();
 		this.hideUi();
 		M_ForceCloseMenu();
@@ -1220,6 +1224,7 @@ class SosQuakeNet {
 		this.setStatus( `Hosting team · ${ this.map }…` );
 		// Publish the hall immediately so a simultaneous Play can still join.
 		this.announce();
+		if ( Touch_IsMobile() ) Touch_EnterPlayMode();
 		this.hideUi();
 		M_ForceCloseMenu();
 		try {
@@ -1395,6 +1400,7 @@ class SosQuakeNet {
 				this.role = 'client';
 				this.map = map || this.map;
 				this.setStatus( 'Connected — entering game…' );
+				if ( Touch_IsMobile() ) Touch_EnterPlayMode();
 				this.hideUi();
 				M_ForceCloseMenu();
 				set_key_dest( key_game );
