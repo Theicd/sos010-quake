@@ -154,6 +154,7 @@ function Touch_CreateUI( container ) {
 	joystickArea.appendChild( joystickBase );
 
 	// Right side - look area (drag to look). Leave a top-right pocket for Weap.
+	// z-index must stay below action buttons or Fire/Jump never receive touches.
 	lookArea = document.createElement( 'div' );
 	lookArea.style.cssText = `
 		position: absolute;
@@ -190,7 +191,7 @@ function Touch_CreateUI( container ) {
 
 	} catch { /* older WebViews */ }
 
-	// Compact action cluster — bottom-right (Fire + Jump only)
+	// Compact action cluster — bottom-right (Fire + Jump only), above look pad
 	actionCluster = document.createElement( 'div' );
 	actionCluster.style.cssText = `
 		position: absolute;
@@ -199,6 +200,7 @@ function Touch_CreateUI( container ) {
 		width: 140px;
 		height: 120px;
 		pointer-events: none;
+		z-index: 310;
 	`;
 
 	fireButton = document.createElement( 'button' );
@@ -254,6 +256,7 @@ function Touch_CreateUI( container ) {
 		box-shadow: 0 6px 16px rgba(0,0,0,.4);
 		backdrop-filter: blur(8px);
 		-webkit-backdrop-filter: blur(8px);
+		z-index: 310;
 	`;
 
 	// Assemble UI
