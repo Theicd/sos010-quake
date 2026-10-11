@@ -427,7 +427,7 @@ class SosQuakeNet {
 		chrome.querySelector( '#sos-quake-download' ).addEventListener( 'click', ( e ) => {
 
 			e.stopPropagation();
-			this.openInstallDialog();
+			void this.onInstallClick();
 
 		} );
 		chrome.querySelector( '#sos-quake-github' ).addEventListener( 'click', ( e ) => e.stopPropagation() );
@@ -478,97 +478,187 @@ class SosQuakeNet {
 
 	setupInstallPrompt() {
 
-		if ( 'serviceWorker' in navigator ) {
+		// Pick up event captured in index.html before the pak finished loading.
+		try {
 
-			addEventListener( 'load', () => {
+			if ( window.__sosQuakeDeferredInstall )
+				this.deferredInstall = window.__sosQuakeDeferredInstall;
 
-				navigator.serviceWorker.register( './sw.js' ).catch( () => {} );
+		} catch { /* ignore */ }
 
-			} );
+		if ( 'serviceWorker' in navigator )
 			navigator.serviceWorker.register( './sw.js' ).catch( () => {} );
-
-		}
 
 		addEventListener( 'beforeinstallprompt', ( e ) => {
 
 			e.preventDefault();
 			this.deferredInstall = e;
+			try {
+
+				window.__sosQuakeDeferredInstall = e;
+
+			} catch { /* ignore */ }
 
 		} );
 		addEventListener( 'appinstalled', () => {
 
 			this.deferredInstall = null;
+			try {
+
+				window.__sosQuakeDeferredInstall = null;
+
+			} catch { /* ignore */ }
+
 			document.getElementById( 'sos-quake-idlg' )?.classList.remove( 'show' );
 
 		} );
 
 	}
 
-	openInstallDialog() {
+	pullDeferredInstall() {
 
-		const dlg = document.getElementById( 'sos-quake-idlg' );
-		if ( ! dlg ) return;
+		try {
+
+			if ( window.__sosQuakeDeferredInstall )
+				this.deferredInstall = window.__sosQuakeDeferredInstall;
+
+		} catch { /* ignore */ }
+
+		return this.deferredInstall;
+
+	}
+
+	/** Same shape as Kart Royale floating install: prompt() when available. */
+	async runInstallPrompt() {
+
+		const ev = this.pullDeferredInstall();
+		if ( ! ev || typeof ev.prompt !== 'function' ) return false;
+		this.deferredInstall = null;
+		try {
+
+			window.__sosQuakeDeferredInstall = null;
+
+		} catch { /* ignore */ }
+
+		try {
+
+			await ev.prompt();
+			await ev.userChoice;
+
+		} catch { /* dismissed */ }
+
+		return true;
+
+	}
+
+	/**
+	 * Download icon — Kart/Chess behaviour:
+	 * Chrome/Edge with a deferred prompt → native install UI immediately.
+	 * iOS → short Add to Home Screen tip. Already installed → brief note.
+	 */
+	async onInstallClick() {
 
 		if ( isStandalone() ) {
 
-			dlg.innerHTML = `
-				<div class="card">
-					<img src="./icon.png" alt="">
-					<h3>כבר מותקן</h3>
-					<p>SOS Quake כבר רץ כהתקנה / אייקון במסך הבית.</p>
-					<div class="row"><button type="button" class="ok">הבנתי</button></div>
-				</div>`;
-			dlg.querySelector( '.ok' ).onclick = () => dlg.classList.remove( 'show' );
-			dlg.classList.add( 'show' );
+			this.showInstallDialog( {
+				title: 'Already installed',
+				body: 'SOS Quake is already on this device. Open it from your home screen or app list.',
+				ok: 'Got it',
+			} );
 			return;
 
 		}
 
-		const head = `
-			<img src="./icon.png" alt="">
-			<h3>התקנת המשחק</h3>
-			<p>ההתקנה מוסיפה את SOS Quake כאייקון בשולחן העבודה או במסך הבית — נוח במובייל ובמחשב, בלי חנות אפליקציות.</p>
-			<ul>
-				<li>פותח במסך מלא, בלי סרגלי דפדפן</li>
-				<li>גישה מהירה מהאייקון</li>
-				<li>עובד גם בטלפון וגם במחשב</li>
-			</ul>`;
-
+		this.pullDeferredInstall();
 		if ( this.deferredInstall ) {
 
-			dlg.innerHTML = `<div class="card">${ head }<p>לחצו <b>התקן</b> לאישור בדפדפן.</p>
-				<div class="row">
-					<button type="button" class="no">לא עכשיו</button>
-					<button type="button" class="ok">התקן</button>
-				</div></div>`;
+			// Kart floating install button: fire the browser prompt on the click gesture.
+			await this.runInstallPrompt();
+			return;
+
+		}
+
+		if ( isIOS() ) {
+
+			this.showInstallDialog( {
+				title: 'Install SOS Quake',
+				body: 'Add the game to your home screen — full screen, one tap to play.',
+				perks: [ 'Full screen, no browser bars', 'Opens faster', 'One tap from home screen' ],
+				ios: true,
+				ok: 'Got it',
+			} );
+			return;
+
+		}
+
+		// Prompt may still arrive shortly after SW activates — brief confirm like Chess/Kart.
+		this.showInstallDialog( {
+			title: 'Install SOS Quake',
+			body: 'Add the game to your device and launch it from the home screen or desktop.',
+			perks: [ 'Full screen, no browser bars', 'Opens faster', 'One tap from home screen' ],
+			install: true,
+		} );
+
+	}
+
+	showInstallDialog( opts ) {
+
+		const dlg = document.getElementById( 'sos-quake-idlg' );
+		if ( ! dlg ) return;
+
+		const perks = Array.isArray( opts.perks )
+			? `<ul>${ opts.perks.map( ( p ) => `<li>${ p }</li>` ).join( '' ) }</ul>`
+			: '';
+		const iosLine = opts.ios
+			? '<p>Tap <b>Share</b> <span style="font-size:17px">&#x2B06;&#xFE0E;</span> in Safari, then <b>Add to Home Screen</b>.</p>'
+			: '';
+
+		if ( opts.install ) {
+
+			dlg.innerHTML = `
+				<div class="card">
+					<img src="./icon.png" alt="">
+					<h3>${ opts.title }</h3>
+					<p>${ opts.body }</p>
+					${ perks }
+					<p>Tap <b>Install</b> to confirm.</p>
+					<div class="row">
+						<button type="button" class="no">Not now</button>
+						<button type="button" class="ok">Install</button>
+					</div>
+				</div>`;
 			dlg.querySelector( '.no' ).onclick = () => dlg.classList.remove( 'show' );
 			dlg.querySelector( '.ok' ).onclick = async () => {
 
 				dlg.classList.remove( 'show' );
-				const ev = this.deferredInstall;
-				this.deferredInstall = null;
-				if ( ! ev ) return;
-				try {
+				// SW may finish activating a moment after first paint — wait briefly.
+				for ( let i = 0; i < 20; i ++ ) {
 
-					await ev.prompt();
-					await ev.userChoice;
+					this.pullDeferredInstall();
+					if ( this.deferredInstall ) {
 
-				} catch { /* dismissed */ }
+						await this.runInstallPrompt();
+						return;
+
+					}
+
+					await new Promise( ( r ) => setTimeout( r, 100 ) );
+
+				}
 
 			};
 
-		} else if ( isIOS() ) {
-
-			dlg.innerHTML = `<div class="card">${ head }
-				<p>ב־Safari: לחצו <b>Share</b> ⌒ ואז <b>Add to Home Screen</b>.</p>
-				<div class="row"><button type="button" class="ok">הבנתי</button></div></div>`;
-			dlg.querySelector( '.ok' ).onclick = () => dlg.classList.remove( 'show' );
-
 		} else {
 
-			dlg.innerHTML = `<div class="card">${ head }
-				<p>בדפדפן: תפריט <b>⋮</b> / כתובת האתר → <b>Install app</b> / <b>Create shortcut</b>.</p>
-				<div class="row"><button type="button" class="ok">הבנתי</button></div></div>`;
+			dlg.innerHTML = `
+				<div class="card">
+					<img src="./icon.png" alt="">
+					<h3>${ opts.title }</h3>
+					<p>${ opts.body }</p>
+					${ perks }
+					${ iosLine }
+					<div class="row"><button type="button" class="ok">${ opts.ok || 'Got it' }</button></div>
+				</div>`;
 			dlg.querySelector( '.ok' ).onclick = () => dlg.classList.remove( 'show' );
 
 		}

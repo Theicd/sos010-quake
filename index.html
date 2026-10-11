@@ -13,6 +13,25 @@
 	<link rel="manifest" href="manifest.webmanifest">
 	<link rel="icon" type="image/svg+xml" href="icon.svg">
 	<link rel="apple-touch-icon" href="icon.png">
+	<!-- Capture PWA install early (same as Kart/Chess). The game loads pak0 for
+	     seconds — if we only listen after that, beforeinstallprompt is already gone. -->
+	<script>
+	(function () {
+		window.__sosQuakeDeferredInstall = null;
+		window.addEventListener('beforeinstallprompt', function (e) {
+			e.preventDefault();
+			window.__sosQuakeDeferredInstall = e;
+		});
+		window.addEventListener('appinstalled', function () {
+			window.__sosQuakeDeferredInstall = null;
+		});
+		if ('serviceWorker' in navigator) {
+			window.addEventListener('load', function () {
+				navigator.serviceWorker.register('./sw.js').catch(function () {});
+			});
+		}
+	})();
+	</script>
 	<style>
 		* {
 			margin: 0;
