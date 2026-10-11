@@ -165,14 +165,29 @@ function Touch_CreateUI( container ) {
 		touch-action: none;
 	`;
 
-	// Compact action cluster — bottom-right, product-style (not giant outline rings)
+	// Weapon cycle — top-right, away from look/aim area
+	weapButton = document.createElement( 'button' );
+	weapButton.type = 'button';
+	weapButton.setAttribute( 'aria-label', 'Next weapon' );
+	weapButton.innerHTML = '<span style="font-size:15px;line-height:1">⇄</span><span style="font-size:9px;opacity:.85">Weap</span>';
+	weapButton.style.cssText = BTN_BASE + `
+		position: absolute;
+		right: max(12px, env(safe-area-inset-right, 0px));
+		top: max(12px, env(safe-area-inset-top, 0px));
+		width: 52px;
+		height: 52px;
+		background: radial-gradient(circle at 35% 30%, rgba(255, 214, 120, 0.5), rgba(80, 52, 12, 0.72));
+		border: 1px solid rgba(214, 178, 98, 0.65);
+	`;
+
+	// Compact action cluster — bottom-right (Fire + Jump only)
 	actionCluster = document.createElement( 'div' );
 	actionCluster.style.cssText = `
 		position: absolute;
 		right: max(12px, env(safe-area-inset-right, 0px));
 		bottom: max(56px, calc(12px + env(safe-area-inset-bottom, 0px) + 44px));
-		width: 168px;
-		height: 168px;
+		width: 140px;
+		height: 120px;
 		pointer-events: none;
 	`;
 
@@ -183,7 +198,7 @@ function Touch_CreateUI( container ) {
 	fireButton.style.cssText = BTN_BASE + `
 		position: absolute;
 		right: 0;
-		bottom: 36px;
+		bottom: 28px;
 		width: 72px;
 		height: 72px;
 		background: radial-gradient(circle at 35% 30%, rgba(255, 120, 90, 0.55), rgba(120, 28, 18, 0.72));
@@ -196,29 +211,14 @@ function Touch_CreateUI( container ) {
 	jumpButton.innerHTML = '<span style="font-size:16px;line-height:1">▴</span><span style="font-size:9px;opacity:.85">Jump</span>';
 	jumpButton.style.cssText = BTN_BASE + `
 		position: absolute;
-		left: 8px;
-		bottom: 8px;
+		left: 0;
+		bottom: 0;
 		width: 60px;
 		height: 60px;
 		background: radial-gradient(circle at 35% 30%, rgba(120, 170, 255, 0.5), rgba(24, 48, 96, 0.72));
 		border: 1px solid rgba(160, 200, 255, 0.5);
 	`;
 
-	weapButton = document.createElement( 'button' );
-	weapButton.type = 'button';
-	weapButton.setAttribute( 'aria-label', 'Next weapon' );
-	weapButton.innerHTML = '<span style="font-size:15px;line-height:1">⇄</span><span style="font-size:9px;opacity:.85">Weap</span>';
-	weapButton.style.cssText = BTN_BASE + `
-		position: absolute;
-		right: 8px;
-		top: 0;
-		width: 56px;
-		height: 56px;
-		background: radial-gradient(circle at 35% 30%, rgba(255, 214, 120, 0.5), rgba(80, 52, 12, 0.72));
-		border: 1px solid rgba(214, 178, 98, 0.65);
-	`;
-
-	actionCluster.appendChild( weapButton );
 	actionCluster.appendChild( jumpButton );
 	actionCluster.appendChild( fireButton );
 
@@ -249,6 +249,7 @@ function Touch_CreateUI( container ) {
 	// Assemble UI
 	overlay.appendChild( joystickArea );
 	overlay.appendChild( lookArea );
+	overlay.appendChild( weapButton );
 	overlay.appendChild( actionCluster );
 	overlay.appendChild( pauseButton );
 

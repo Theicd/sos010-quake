@@ -1,5 +1,5 @@
 // SOS Quake — network-first shell so deploys show up; cache icons/pak for offline-ish relaunch.
-const CACHE = 'sos-quake-v9';
+const CACHE = 'sos-quake-v10';
 
 self.addEventListener( 'install', ( e ) => {
 
