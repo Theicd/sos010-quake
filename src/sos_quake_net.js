@@ -190,25 +190,12 @@ function spawnLootEntity( classname, origin ) {
 	ent.v.origin[ 0 ] = origin[ 0 ];
 	ent.v.origin[ 1 ] = origin[ 1 ];
 	ent.v.origin[ 2 ] = origin[ 2 ];
-	try {
-
-		pr_global_struct.time = sv.time;
-		pr_global_struct.self = EDICT_TO_PROG( ent );
-		PR_ExecuteProgram( pr_functions.indexOf( func ) );
-		return ! ent.free;
-
-	} catch ( err ) {
-
-		try {
-
-			ED_Free( ent );
-
-		} catch { /* ignore */ }
-
-		Con_Printf( 'SOS Quake: loot spawn failed (%s)\n', classname );
-		return false;
-
-	}
+	// Must run during SV_SpawnServer (ss_loading). Do not catch Host_Error —
+	// that path already tore the server down.
+	pr_global_struct.time = sv.time;
+	pr_global_struct.self = EDICT_TO_PROG( ent );
+	PR_ExecuteProgram( pr_functions.indexOf( func ) );
+	return ! ent.free;
 
 }
 
@@ -1625,27 +1612,31 @@ export function SosQuake_Start() {
 }
 
 /**
+ * Called from SV_SpawnServer after BSP entities load, while still ss_loading
+ * so QuakeC spawn/precache is legal.
+ */
+export function Sos_OnMapEntitiesLoaded( mapName ) {
+
+	const key = mapName || sv?.name || '';
+	if ( ! key ) return;
+	if ( net ) net.lootScatteredFor = key;
+	scatterStarterLoot( key );
+
+}
+
+try {
+
+	globalThis.__sosOnMapEntitiesLoaded = Sos_OnMapEntitiesLoaded;
+
+} catch { /* non-browser */ }
+
+/**
  * Called from Host_Spawn_f after a client finishes spawning.
  * Places late joiners next to an already-active player on the map.
- * Host also scatters starter weapons/armor once per map load.
  */
 export function Sos_OnClientSpawned( client ) {
 
 	if ( ! client || ! client.edict || ! svs?.clients ) return;
-
-	// Scatter cool pickups once per map on the listen-server owner (host or solo).
-	if ( sv?.active ) {
-
-		const mapKey = sv.name || net?.map || '';
-		const ownsServer = ! net || net.role === 'host' || net.role === 'idle';
-		if ( ownsServer && mapKey && ( ! net || net.lootScatteredFor !== mapKey ) ) {
-
-			if ( net ) net.lootScatteredFor = mapKey;
-			scatterStarterLoot( mapKey );
-
-		}
-
-	}
 
 	// Only the listen-server host can relocate edicts.
 	let others = 0;

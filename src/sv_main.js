@@ -1764,6 +1764,18 @@ export function SV_SpawnServer( server ) {
 
 	}
 
+	// SOS: extra starter loot while still ss_loading (precache allowed).
+	try {
+
+		if ( typeof globalThis.__sosOnMapEntitiesLoaded === 'function' )
+			globalThis.__sosOnMapEntitiesLoaded( server );
+
+	} catch ( e ) {
+
+		Con_Printf( 'SOS Quake: loot scatter skipped (%s)\n', e?.message || e );
+
+	}
+
 	sv.active = true;
 
 	// all setup is completed, any further precache statements are errors

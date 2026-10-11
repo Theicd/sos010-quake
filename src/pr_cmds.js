@@ -911,10 +911,20 @@ function PF_precache_sound() {
 	G_INT_SET( OFS_RETURN, G_INT( OFS_PARM0 ) );
 	PR_CheckEmptyString( s );
 
-	if ( sv.state !== ss_loading )
-		PR_RunError( 'PF_Precache_*: Precache can only be done in spawn functions' );
-
 	if ( sv.sound_precache ) {
+
+		// Idempotent after load: already-known sounds are fine mid-game.
+		for ( let i = 0; i < MAX_SOUNDS; i ++ ) {
+
+			if ( sv.sound_precache[ i ] === s )
+				return;
+			if ( sv.sound_precache[ i ] == null )
+				break;
+
+		}
+
+		if ( sv.state !== ss_loading )
+			PR_RunError( 'PF_Precache_*: Precache can only be done in spawn functions' );
 
 		for ( let i = 0; i < MAX_SOUNDS; i ++ ) {
 
@@ -924,9 +934,6 @@ function PF_precache_sound() {
 				return;
 
 			}
-
-			if ( sv.sound_precache[ i ] === s )
-				return;
 
 		}
 
@@ -942,10 +949,20 @@ function PF_precache_model() {
 	G_INT_SET( OFS_RETURN, G_INT( OFS_PARM0 ) );
 	PR_CheckEmptyString( s );
 
-	if ( sv.state !== ss_loading )
-		PR_RunError( 'PF_Precache_*: Precache can only be done in spawn functions' );
-
 	if ( sv.model_precache ) {
+
+		// Idempotent after load: already-known models are fine mid-game.
+		for ( let i = 0; i < MAX_MODELS; i ++ ) {
+
+			if ( sv.model_precache[ i ] === s )
+				return;
+			if ( sv.model_precache[ i ] == null )
+				break;
+
+		}
+
+		if ( sv.state !== ss_loading )
+			PR_RunError( 'PF_Precache_*: Precache can only be done in spawn functions' );
 
 		for ( let i = 0; i < MAX_MODELS; i ++ ) {
 
@@ -956,9 +973,6 @@ function PF_precache_model() {
 				return;
 
 			}
-
-			if ( sv.model_precache[ i ] === s )
-				return;
 
 		}
 
