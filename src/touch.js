@@ -153,32 +153,42 @@ function Touch_CreateUI( container ) {
 	joystickBase.appendChild( joystickKnob );
 	joystickArea.appendChild( joystickBase );
 
-	// Right side - look area (tap to jump, drag to look)
+	// Right side - look area (drag to look). Leave a top-right pocket for Weap.
 	lookArea = document.createElement( 'div' );
 	lookArea.style.cssText = `
 		position: absolute;
 		right: 0;
-		top: 0;
+		top: 72px;
 		width: 60%;
-		height: 100%;
+		height: calc(100% - 72px);
 		pointer-events: auto;
 		touch-action: none;
+		z-index: 1;
 	`;
 
-	// Weapon cycle — top-right, away from look/aim area
+	// Weapon cycle — fixed top-right corner (above look pad, away from aim)
 	weapButton = document.createElement( 'button' );
 	weapButton.type = 'button';
+	weapButton.id = 'sos-touch-weap';
 	weapButton.setAttribute( 'aria-label', 'Next weapon' );
 	weapButton.innerHTML = '<span style="font-size:15px;line-height:1">⇄</span><span style="font-size:9px;opacity:.85">Weap</span>';
 	weapButton.style.cssText = BTN_BASE + `
-		position: absolute;
-		right: max(12px, env(safe-area-inset-right, 0px));
-		top: max(12px, env(safe-area-inset-top, 0px));
+		position: fixed;
+		right: 12px;
+		top: 12px;
 		width: 52px;
 		height: 52px;
+		z-index: 320;
 		background: radial-gradient(circle at 35% 30%, rgba(255, 214, 120, 0.5), rgba(80, 52, 12, 0.72));
 		border: 1px solid rgba(214, 178, 98, 0.65);
 	`;
+	// Notch / status-bar safe inset when supported
+	try {
+
+		weapButton.style.top = 'max(12px, env(safe-area-inset-top, 0px))';
+		weapButton.style.right = 'max(12px, env(safe-area-inset-right, 0px))';
+
+	} catch { /* older WebViews */ }
 
 	// Compact action cluster — bottom-right (Fire + Jump only)
 	actionCluster = document.createElement( 'div' );

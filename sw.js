@@ -1,5 +1,5 @@
 // SOS Quake — network-first shell so deploys show up; cache icons/pak for offline-ish relaunch.
-const CACHE = 'sos-quake-v10';
+const CACHE = 'sos-quake-v11';
 
 self.addEventListener( 'install', ( e ) => {
 
@@ -38,11 +38,16 @@ self.addEventListener( 'fetch', ( e ) => {
 	const url = new URL( req.url );
 	if ( url.origin !== self.location.origin ) return;
 
+	const isCode = /\.(js|mjs|css|html)$/i.test( url.pathname )
+		|| url.pathname.endsWith( '/' )
+		|| url.pathname.endsWith( '/sw.js' );
+
 	e.respondWith( ( async () => {
 
 		try {
 
-			const fresh = await fetch( req );
+			// Bypass HTTP cache for app code so mobile/PWA picks up deploys.
+			const fresh = await fetch( req, isCode ? { cache: 'no-store' } : undefined );
 			if ( fresh && fresh.ok && ( url.pathname.endsWith( '.png' )
 				|| url.pathname.endsWith( '.svg' )
 				|| url.pathname.endsWith( '.webmanifest' )
