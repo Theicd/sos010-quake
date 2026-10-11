@@ -491,6 +491,14 @@ function handleWheel( event ) {
 
 	if ( ! in_initialized ) return;
 
+	// In-game: wheel cycles weapons (bound to impulse 10 / 12).
+	// Always consume so the page itself does not scroll under the canvas.
+	if ( key_dest === key_game || pointerLocked ) {
+
+		event.preventDefault();
+
+	}
+
 	if ( event.deltaY < 0 ) {
 
 		Key_Event( K_MWHEELUP, true );
@@ -639,7 +647,9 @@ export function IN_Init( element ) {
 	targetElement.addEventListener( 'mousemove', handleMouseMove );
 	targetElement.addEventListener( 'mousedown', handleMouseDown );
 	targetElement.addEventListener( 'mouseup', handleMouseUp );
-	targetElement.addEventListener( 'wheel', handleWheel );
+	targetElement.addEventListener( 'wheel', handleWheel, { passive: false } );
+	// Pointer-lock wheel events sometimes land on document instead of the canvas.
+	document.addEventListener( 'wheel', handleWheel, { passive: false } );
 	targetElement.addEventListener( 'contextmenu', handleContextMenu );
 
 	document.addEventListener( 'pointerlockchange', handlePointerLockChange );
@@ -692,6 +702,7 @@ export function IN_Shutdown() {
 
 	}
 
+	document.removeEventListener( 'wheel', handleWheel );
 	document.removeEventListener( 'pointerlockchange', handlePointerLockChange );
 	document.removeEventListener( 'visibilitychange', handleVisibilityChange );
 

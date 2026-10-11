@@ -403,6 +403,8 @@ export async function Host_Init( parms ) {
 	Cbuf_AddText( 'bind d +moveright\n' );
 	Cbuf_AddText( 'bind SPACE +jump\n' );
 	Cbuf_AddText( 'bind MOUSE1 +attack\n' );
+	Cbuf_AddText( 'bind MWHEELUP "impulse 10"\n' );
+	Cbuf_AddText( 'bind MWHEELDOWN "impulse 12"\n' );
 
 	// Always run by default for the web port
 	Cbuf_AddText( 'cl_forwardspeed 400\n' );
@@ -423,6 +425,10 @@ export async function Host_Init( parms ) {
 
 		// localStorage may be unavailable
 	}
+
+	// Ensure mouse-wheel weapon cycle survives older saved configs.
+	Cbuf_AddText( 'bind MWHEELUP "impulse 10"\n' );
+	Cbuf_AddText( 'bind MWHEELDOWN "impulse 12"\n' );
 
 	// Save config on page unload
 	if ( typeof window !== 'undefined' ) {

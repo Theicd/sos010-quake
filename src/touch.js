@@ -1,9 +1,10 @@
 // Touch controls for mobile devices
-// Provides virtual joystick on left, look area on right with tap-to-jump
+// Provides virtual joystick on left, look area on right, compact action cluster
 
 import { K_ESCAPE, Key_Event } from './keys.js';
 import { in_attack, in_jump } from './cl_input.js';
 import { S_UnlockAudio } from './snd_dma.js';
+import { Cbuf_AddText } from './cmd.js';
 
 // Touch state
 let enabled = false;
@@ -45,9 +46,32 @@ let joystickArea = null;
 let joystickBase = null;
 let joystickKnob = null;
 let lookArea = null;
+let actionCluster = null;
 let fireButton = null;
 let jumpButton = null;
+let weapButton = null;
 let pauseButton = null;
+
+const BTN_BASE = `
+	pointer-events: auto;
+	touch-action: none;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+	border-radius: 50%;
+	font-family: "Segoe UI", system-ui, sans-serif;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: rgba(255, 236, 196, 0.92);
+	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+	backdrop-filter: blur(10px);
+	-webkit-backdrop-filter: blur(10px);
+	user-select: none;
+	-webkit-user-select: none;
+`;
 
 /*
 =================
@@ -141,77 +165,91 @@ function Touch_CreateUI( container ) {
 		touch-action: none;
 	`;
 
-	// Fire button (top right)
-	fireButton = document.createElement( 'div' );
-	fireButton.style.cssText = `
+	// Compact action cluster — bottom-right, product-style (not giant outline rings)
+	actionCluster = document.createElement( 'div' );
+	actionCluster.style.cssText = `
 		position: absolute;
-		right: 60px;
-		top: 50px;
-		width: 100px;
-		height: 100px;
-		border-radius: 50%;
-		background: transparent;
-		border: 2px solid rgba(255, 100, 100, 0.5);
-		pointer-events: auto;
-		touch-action: none;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		font-family: sans-serif;
-		font-size: 14px;
-		color: rgba(255, 255, 255, 0.7);
+		right: max(12px, env(safe-area-inset-right, 0px));
+		bottom: max(56px, calc(12px + env(safe-area-inset-bottom, 0px) + 44px));
+		width: 168px;
+		height: 168px;
+		pointer-events: none;
 	`;
-	fireButton.textContent = 'FIRE';
 
-	// Jump button (below fire button)
-	jumpButton = document.createElement( 'div' );
-	jumpButton.style.cssText = `
+	fireButton = document.createElement( 'button' );
+	fireButton.type = 'button';
+	fireButton.setAttribute( 'aria-label', 'Fire' );
+	fireButton.innerHTML = '<span style="font-size:18px;line-height:1">◈</span><span style="font-size:9px;opacity:.85">Fire</span>';
+	fireButton.style.cssText = BTN_BASE + `
 		position: absolute;
-		right: 60px;
-		top: 170px;
-		width: 100px;
-		height: 100px;
-		border-radius: 50%;
-		background: transparent;
-		border: 2px solid rgba(100, 150, 255, 0.5);
-		pointer-events: auto;
-		touch-action: none;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		font-family: sans-serif;
-		font-size: 14px;
-		color: rgba(255, 255, 255, 0.7);
+		right: 0;
+		bottom: 36px;
+		width: 72px;
+		height: 72px;
+		background: radial-gradient(circle at 35% 30%, rgba(255, 120, 90, 0.55), rgba(120, 28, 18, 0.72));
+		border: 1px solid rgba(255, 170, 120, 0.55);
 	`;
-	jumpButton.textContent = 'JUMP';
+
+	jumpButton = document.createElement( 'button' );
+	jumpButton.type = 'button';
+	jumpButton.setAttribute( 'aria-label', 'Jump' );
+	jumpButton.innerHTML = '<span style="font-size:16px;line-height:1">▴</span><span style="font-size:9px;opacity:.85">Jump</span>';
+	jumpButton.style.cssText = BTN_BASE + `
+		position: absolute;
+		left: 8px;
+		bottom: 8px;
+		width: 60px;
+		height: 60px;
+		background: radial-gradient(circle at 35% 30%, rgba(120, 170, 255, 0.5), rgba(24, 48, 96, 0.72));
+		border: 1px solid rgba(160, 200, 255, 0.5);
+	`;
+
+	weapButton = document.createElement( 'button' );
+	weapButton.type = 'button';
+	weapButton.setAttribute( 'aria-label', 'Next weapon' );
+	weapButton.innerHTML = '<span style="font-size:15px;line-height:1">⇄</span><span style="font-size:9px;opacity:.85">Weap</span>';
+	weapButton.style.cssText = BTN_BASE + `
+		position: absolute;
+		right: 8px;
+		top: 0;
+		width: 56px;
+		height: 56px;
+		background: radial-gradient(circle at 35% 30%, rgba(255, 214, 120, 0.5), rgba(80, 52, 12, 0.72));
+		border: 1px solid rgba(214, 178, 98, 0.65);
+	`;
+
+	actionCluster.appendChild( weapButton );
+	actionCluster.appendChild( jumpButton );
+	actionCluster.appendChild( fireButton );
 
 	// Pause button (bottom right corner)
-	pauseButton = document.createElement( 'div' );
+	pauseButton = document.createElement( 'button' );
+	pauseButton.type = 'button';
+	pauseButton.setAttribute( 'aria-label', 'Pause' );
+	pauseButton.innerHTML = '<span style="font-size:14px;letter-spacing:2px">❚❚</span>';
 	pauseButton.style.cssText = `
 		position: absolute;
-		right: 20px;
-		bottom: 20px;
+		right: max(12px, env(safe-area-inset-right, 0px));
+		bottom: max(10px, env(safe-area-inset-bottom, 0px));
 		width: 40px;
 		height: 40px;
-		border-radius: 5px;
-		background: rgba(255, 255, 255, 0.15);
-		border: 1px solid rgba(255, 255, 255, 0.3);
+		border-radius: 12px;
+		background: rgba(12, 10, 8, 0.62);
+		border: 1px solid rgba(214, 178, 98, 0.4);
+		color: #f2e6c9;
 		pointer-events: auto;
 		touch-action: none;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		font-family: sans-serif;
-		font-size: 16px;
-		color: rgba(255, 255, 255, 0.7);
+		display: grid;
+		place-items: center;
+		box-shadow: 0 6px 16px rgba(0,0,0,.4);
+		backdrop-filter: blur(8px);
+		-webkit-backdrop-filter: blur(8px);
 	`;
-	pauseButton.textContent = '| |';
 
 	// Assemble UI
 	overlay.appendChild( joystickArea );
 	overlay.appendChild( lookArea );
-	overlay.appendChild( fireButton );
-	overlay.appendChild( jumpButton );
+	overlay.appendChild( actionCluster );
 	overlay.appendChild( pauseButton );
 
 	container.appendChild( overlay );
@@ -323,14 +361,24 @@ function onTouchStart( e ) {
 		} else if ( target === fireButton ) {
 
 			in_attack.state |= 1 + 2; // down + impulse down
-			fireButton.style.background = 'rgba(255, 100, 100, 0.2)';
-			if ( typeof navigator.vibrate === 'function' ) navigator.vibrate( 100 );
+			fireButton.style.filter = 'brightness(1.25)';
+			fireButton.style.transform = 'scale(0.94)';
+			if ( typeof navigator.vibrate === 'function' ) navigator.vibrate( 24 );
 
 		} else if ( target === jumpButton ) {
 
 			in_jump.state |= 1 + 2; // down + impulse down
-			jumpButton.style.background = 'rgba(100, 150, 255, 0.2)';
-			if ( typeof navigator.vibrate === 'function' ) navigator.vibrate( 100 );
+			jumpButton.style.filter = 'brightness(1.25)';
+			jumpButton.style.transform = 'scale(0.94)';
+			if ( typeof navigator.vibrate === 'function' ) navigator.vibrate( 18 );
+
+		} else if ( target === weapButton ) {
+
+			// Cycle to next owned weapon (Quake impulse 10)
+			Cbuf_AddText( 'impulse 10\n' );
+			weapButton.style.filter = 'brightness(1.3)';
+			weapButton.style.transform = 'scale(0.94)';
+			if ( typeof navigator.vibrate === 'function' ) navigator.vibrate( 16 );
 
 		} else if ( target === pauseButton ) {
 
@@ -431,13 +479,20 @@ function onTouchEnd( e ) {
 
 			in_attack.state &= ~1; // up
 			in_attack.state |= 4; // impulse up
-			fireButton.style.background = 'transparent';
+			fireButton.style.filter = '';
+			fireButton.style.transform = '';
 
 		} else if ( target === jumpButton ) {
 
 			in_jump.state &= ~1; // up
 			in_jump.state |= 4; // impulse up
-			jumpButton.style.background = 'transparent';
+			jumpButton.style.filter = '';
+			jumpButton.style.transform = '';
+
+		} else if ( target === weapButton ) {
+
+			weapButton.style.filter = '';
+			weapButton.style.transform = '';
 
 		}
 
@@ -754,6 +809,10 @@ export function Touch_Enable() {
 	jumpButton.addEventListener( 'touchend', onTouchEnd, { passive: false } );
 	jumpButton.addEventListener( 'touchcancel', onTouchEnd, { passive: false } );
 
+	weapButton.addEventListener( 'touchstart', onTouchStart, { passive: false } );
+	weapButton.addEventListener( 'touchend', onTouchEnd, { passive: false } );
+	weapButton.addEventListener( 'touchcancel', onTouchEnd, { passive: false } );
+
 	pauseButton.addEventListener( 'touchstart', onTouchStart, { passive: false } );
 
 	// Enable gyroscope if permission was already granted
@@ -800,6 +859,10 @@ export function Touch_Disable() {
 	jumpButton.removeEventListener( 'touchstart', onTouchStart );
 	jumpButton.removeEventListener( 'touchend', onTouchEnd );
 	jumpButton.removeEventListener( 'touchcancel', onTouchEnd );
+
+	weapButton.removeEventListener( 'touchstart', onTouchStart );
+	weapButton.removeEventListener( 'touchend', onTouchEnd );
+	weapButton.removeEventListener( 'touchcancel', onTouchEnd );
 
 	pauseButton.removeEventListener( 'touchstart', onTouchStart );
 

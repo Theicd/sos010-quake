@@ -1703,6 +1703,8 @@ function M_Options_Key( key ) {
 					Cbuf_AddText( 'bind d +moveright\n' );
 					Cbuf_AddText( 'bind SPACE +jump\n' );
 					Cbuf_AddText( 'bind MOUSE1 +attack\n' );
+					Cbuf_AddText( 'bind MWHEELUP "impulse 10"\n' );
+					Cbuf_AddText( 'bind MWHEELDOWN "impulse 12"\n' );
 					Cbuf_AddText( 'cl_forwardspeed 400\n' );
 					Cbuf_AddText( 'cl_backspeed 400\n' );
 					Cbuf_AddText( 'gamma 1\n' );
