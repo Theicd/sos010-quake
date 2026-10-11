@@ -68,14 +68,14 @@ const LISTEN_MS = 3_500;
 const JOIN_TIMEOUT_MS = 14_000;
 const ICE_WAIT_MS = 4_000;
 const DEFAULT_MAP = 'start';
-/** Shareware episode maps for Team / coop — random pick (no real levelshots in pak0). */
+/** Shareware episode maps for Team / coop. */
 const TEAM_MAPS = [ 'start', 'e1m1', 'e1m2', 'e1m3', 'e1m4', 'e1m5', 'e1m6', 'e1m7', 'e1m8' ];
 /** Extra wait (0–2.5s) so two Play presses don't both become host. */
 const HOST_STAGGER_MAX_MS = 2_500;
 const BUS_NAME = 'sos_quake_v3_bus';
 const LS_ROOM_KEY = 'sos_quake_v3_rooms';
 
-/** Cool pickups scattered across the map once the host (or solo) spawns in. */
+/** Weapons / armor / ammo scattered across the map at load (not stacked). */
 const STARTER_LOOT = [
 	'weapon_supershotgun',
 	'weapon_nailgun',
@@ -159,53 +159,138 @@ function pickRandomMap() {
 
 function collectLootAnchors() {
 
-	const out = [];
-	if ( ! sv?.active || ! sv.num_edicts ) return out;
+	const starts = [];
+	const others = [];
+	// Called during SV_SpawnServer before sv.active — use edict count only.
+	if ( ! sv?.num_edicts ) return { starts, others, all: [] };
 	for ( let i = 1; i < sv.num_edicts; i ++ ) {
 
 		const ed = EDICT_NUM( i );
 		if ( ! ed || ed.free ) continue;
 		const cn = PR_GetString( ed.v.classname ) || '';
-		if ( ! /^(info_player|weapon_|item_|monster_|path_corner)/.test( cn ) ) continue;
 		const o = ed.v.origin;
 		if ( ! o ) continue;
 		const x = Number( o[ 0 ] );
 		const y = Number( o[ 1 ] );
 		const z = Number( o[ 2 ] );
 		if ( ! Number.isFinite( x + y + z ) ) continue;
-		out.push( [ x, y, z ] );
+		const pos = [ x, y, z ];
+		if ( /^info_player/.test( cn ) ) starts.push( pos );
+		else if ( /^(weapon_|item_|monster_|path_corner)/.test( cn ) ) others.push( pos );
 
 	}
 
-	return out;
+	return { starts, others, all: starts.concat( others ) };
 
 }
 
 function spawnLootEntity( classname, origin ) {
 
 	const func = ED_FindFunction( classname );
-	if ( ! func ) return false;
+	if ( ! func || ! pr_global_struct || ! pr_functions ) return false;
+	const fnum = pr_functions.indexOf( func );
+	if ( fnum < 0 ) return false;
 	const ent = ED_Alloc();
 	ent.v.classname = ED_NewString( classname );
 	ent.v.origin[ 0 ] = origin[ 0 ];
 	ent.v.origin[ 1 ] = origin[ 1 ];
 	ent.v.origin[ 2 ] = origin[ 2 ];
-	// Must run during SV_SpawnServer (ss_loading). Do not catch Host_Error —
-	// that path already tore the server down.
-	pr_global_struct.time = sv.time;
-	pr_global_struct.self = EDICT_TO_PROG( ent );
-	PR_ExecuteProgram( pr_functions.indexOf( func ) );
-	return ! ent.free;
+	try {
+
+		pr_global_struct.time = sv.time;
+		pr_global_struct.self = EDICT_TO_PROG( ent );
+		PR_ExecuteProgram( fnum );
+		return ! ent.free;
+
+	} catch {
+
+		try {
+
+			ED_Free( ent );
+
+		} catch { /* ignore */ }
+
+		return false;
+
+	}
 
 }
 
 /**
- * Extra map loot — disabled for now. Spawning QuakeC items after (or during)
- * load proved fragile across cached deploys; keep Play reliable first.
+ * Drop weapons / armor around the map so the opening minutes feel hotter.
+ * Must run during SV_SpawnServer (ss_loading). Host entities replicate to joiners.
  */
-function scatterStarterLoot( _mapName ) {
+function scatterStarterLoot( mapName ) {
 
-	return 0;
+	if ( ! sv?.num_edicts || ! pr_global_struct ) return 0;
+	const { starts, all } = collectLootAnchors();
+	if ( all.length < 1 ) return 0;
+
+	const bag = STARTER_LOOT.slice();
+	for ( let i = bag.length - 1; i > 0; i -- ) {
+
+		const j = Math.floor( Math.random() * ( i + 1 ) );
+		const tmp = bag[ i ];
+		bag[ i ] = bag[ j ];
+		bag[ j ] = tmp;
+
+	}
+
+	// Early maps bias pickups toward player starts for immediate action.
+	const nearStartBias = ( mapName === 'start' || mapName === 'e1m1' ) ? 0.75 : 0.45;
+	const minDist = 64;
+	const used = [];
+	let placed = 0;
+
+	for ( let n = 0; n < bag.length; n ++ ) {
+
+		const classname = bag[ n ];
+		let best = null;
+		for ( let tries = 0; tries < 18; tries ++ ) {
+
+			const preferStarts = n < bag.length * nearStartBias && starts.length > 0;
+			const pool = preferStarts ? starts : all;
+			const base = pool[ Math.floor( Math.random() * pool.length ) ];
+			const ang = n * 2.3999632 + tries * 0.7 + Math.random() * 0.35;
+			const dist = 80 + ( n % 6 ) * 52 + Math.random() * 72;
+			const pos = [
+				base[ 0 ] + Math.cos( ang ) * dist,
+				base[ 1 ] + Math.sin( ang ) * dist,
+				base[ 2 ] + 18,
+			];
+			let ok = true;
+			for ( let u = 0; u < used.length; u ++ ) {
+
+				const dx = used[ u ][ 0 ] - pos[ 0 ];
+				const dy = used[ u ][ 1 ] - pos[ 1 ];
+				if ( dx * dx + dy * dy < minDist * minDist ) {
+
+					ok = false;
+					break;
+
+				}
+
+			}
+
+			if ( ! ok ) continue;
+			best = pos;
+			break;
+
+		}
+
+		if ( ! best ) continue;
+		if ( spawnLootEntity( classname, best ) ) {
+
+			used.push( best );
+			placed ++;
+
+		}
+
+	}
+
+	if ( placed > 0 )
+		Con_Printf( 'SOS Quake: scattered %d starter pickups on %s\n', placed, mapName || sv.name || '?' );
+	return placed;
 
 }
 
@@ -277,6 +362,18 @@ const CSS = `
 #sos-quake-ui .brand {
   font-size: 11px; letter-spacing: .28em; text-transform: uppercase;
   color: #d6b262; margin-bottom: 6px;
+}
+#sos-quake-ui .modes {
+  display: flex; gap: 8px; margin: 0 0 12px;
+}
+#sos-quake-ui .mode {
+  flex: 1; border-radius: 999px; border: 1px solid rgba(255,255,255,.16);
+  background: rgba(255,255,255,.06); color: #cbb996; padding: 8px 10px;
+  font: 700 12px/1.1 system-ui, sans-serif; letter-spacing: .04em; cursor: pointer;
+}
+#sos-quake-ui .mode.on {
+  color: #1a1208; border-color: rgba(214,178,98,.7);
+  background: linear-gradient(180deg, #ffe08a, #d4a43a);
 }
 #sos-quake-ui h1 {
   font-size: 1.55rem; line-height: 1.1; margin: 0 0 6px; font-weight: 800;
@@ -361,7 +458,6 @@ class SosQuakeNet {
 		this.timers = [];
 		this.mode = MODE_TEAM;
 		this.map = pickRandomMap();
-		this.lootScatteredFor = null;
 		this.ui = null;
 		this.chrome = null;
 		this.lamp = null;
@@ -372,6 +468,7 @@ class SosQuakeNet {
 		this.hostSince = 0;
 		this.joining = false;
 		this.deferredInstall = null;
+		this.lootScatteredFor = null;
 		this._ingestRoom = this._ingestRoom.bind( this );
 
 	}
@@ -416,7 +513,7 @@ class SosQuakeNet {
 			<div class="panel">
 				<div class="brand">SOS · Three.js Quake</div>
 				<h1>Team</h1>
-				<p class="plot">Tap Play — 2–4 players team up over P2P against the monsters. Join an open hall or host if empty. Map is random each game.</p>
+				<p class="plot">Tap Play — 2–4 players team up over P2P against the monsters. Join an open hall or host if empty. Weapons and armor scatter across the map at the start — hunt them down.</p>
 				<div class="status" id="sos-quake-status">Ready</div>
 				<div class="row">
 					<button type="button" class="btn" id="sos-quake-play">Play</button>
@@ -733,7 +830,6 @@ class SosQuakeNet {
 	soloFallback() {
 
 		this.map = pickRandomMap();
-		this.lootScatteredFor = null;
 		this.hideUi();
 		M_ForceCloseMenu();
 		CL_ResetRemoteSmooth();
@@ -1089,7 +1185,6 @@ class SosQuakeNet {
 		this.hostSince = now();
 		this.mode = MODE_TEAM;
 		this.map = pickRandomMap();
-		this.lootScatteredFor = null;
 		this.setStatus( `Hosting team · ${ this.map }…` );
 		// Publish the hall immediately so a simultaneous Play can still join.
 		this.announce();
